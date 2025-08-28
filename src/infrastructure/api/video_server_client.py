@@ -21,7 +21,7 @@ class VideoServerClient(EvidenceRepository, ImageSearchRepository):
         self.base_url = str(settings.video_server_base_url).rstrip('/')
         self.api_key = settings.video_server_api_key
         self.client = httpx.AsyncClient(
-            timeout=30.0,
+            timeout=httpx.Timeout(60.0, connect=10.0),  # 60s read timeout, 10s connect timeout
             headers={"X-API-Key": self.api_key}
         )
     

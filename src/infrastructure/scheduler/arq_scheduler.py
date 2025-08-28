@@ -435,7 +435,7 @@ def create_scheduler_settings() -> Dict[str, Any]:
         "on_startup": startup,
         "on_shutdown": shutdown,
         "max_jobs": settings.worker_concurrency,
-        "job_timeout": 300,  # 5 minutes timeout
+        "job_timeout": 600,  # 10 minutes timeout (increased for large batches)
         "keep_result": 3600,  # Keep results for 1 hour
         "poll_delay": 0.5,
         "queue_read_limit": 100,
