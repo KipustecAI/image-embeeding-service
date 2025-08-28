@@ -18,6 +18,7 @@ import httpx
 
 from src.infrastructure.config import get_settings
 from src.infrastructure.scheduler import EmbeddingScheduler
+from src.api.dependencies import verify_api_key
 
 from src.application.dto import ImageSearchRequest, ImageSearchResponse
 from src.domain.entities import ImageSearch
@@ -166,7 +167,8 @@ async def search_manual(
     user_id: str,
     image_url: str,
     threshold: float = 0.75,
-    max_results: int = 50
+    max_results: int = 50,
+    _api_key: str = Depends(verify_api_key)
 ):
     """Manually trigger a similarity search."""
     try:
@@ -218,7 +220,9 @@ async def search_manual(
 
 
 @app.post("/api/v1/process/evidences")
-async def process_evidences():
+async def process_evidences(
+    _api_key: str = Depends(verify_api_key)
+):
     """Manually trigger evidence processing."""
     try:
         result = await scheduler.evidence_use_case.execute_batch(
@@ -242,7 +246,9 @@ async def process_evidences():
 
 
 @app.post("/api/v1/process/searches")
-async def process_searches():
+async def process_searches(
+    _api_key: str = Depends(verify_api_key)
+):
     """Manually trigger search processing."""
     try:
         responses = await scheduler.search_use_case.process_pending_searches(
@@ -272,7 +278,8 @@ async def recalculate_searches(
     search_ids: Optional[List[str]] = Query(None, description="Specific search IDs to recalculate"),
     limit: int = Query(10, ge=1, le=100, description="Max searches to recalculate (when not using search_ids)"),
     hours_old: Optional[int] = Query(None, ge=1, le=168, description="Only recalculate searches older than X hours"),
-    force_all: bool = Query(False, description="Recalculate ALL eligible searches (ignores limit)")
+    force_all: bool = Query(False, description="Recalculate ALL eligible searches (ignores limit)"),
+    _api_key: str = Depends(verify_api_key)
 ):
     """Trigger recalculation for completed searches with new evidence.
     
@@ -419,7 +426,10 @@ async def recalculate_searches(
 
 
 @app.post("/api/v1/recalculate/search/{search_id}")
-async def recalculate_single_search(search_id: str):
+async def recalculate_single_search(
+    search_id: str,
+    _api_key: str = Depends(verify_api_key)
+):
     """Trigger recalculation for a single specific search.
     
     Convenience endpoint for recalculating a single search by ID.

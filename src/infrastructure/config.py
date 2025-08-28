@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     debug: bool = Field(False, validation_alias="DEBUG")
     log_level: str = Field("INFO", validation_alias="LOG_LEVEL")
     
+    # Service Security
+    service_api_key: str = Field(..., validation_alias="EMBEDDING_SERVICE_API_KEY")
+    
     # Main Video Server API
     video_server_base_url: str = Field("http://localhost:8000", validation_alias="VIDEO_SERVER_BASE_URL")
     video_server_api_key: str = Field(..., validation_alias="VIDEO_SERVER_API_KEY")  # Must be DEV or ROOT role
