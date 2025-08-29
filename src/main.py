@@ -320,11 +320,15 @@ async def recalculate_searches(
                         
                         if response.status_code == 200:
                             search_data = response.json()
-                            # Only add if it's completed with matches
-                            if search_data["search_status"] == 3 and search_data["similarity_status"] == 2:
+                            # Allow recalculation of any completed search
+                            # This enables re-searching when new evidence arrives
+                            if search_data["search_status"] == 3:  # COMPLETED
                                 searches_to_recalc.append(search_data)
+                                logger.info(f"Search {search_id} added for recalculation (similarity_status={search_data.get('similarity_status')})")
                             else:
-                                logger.warning(f"Search {search_id} not eligible for recalculation")
+                                status_names = {1: "PENDING", 2: "IN_PROGRESS", 3: "COMPLETED", 4: "FAILED"}
+                                current_status = status_names.get(search_data["search_status"], "UNKNOWN")
+                                logger.warning(f"Search {search_id} not eligible - status is {current_status} (needs COMPLETED)")
                     except ValueError:
                         logger.error(f"Invalid UUID format: {search_id}")
                     except Exception as e:
