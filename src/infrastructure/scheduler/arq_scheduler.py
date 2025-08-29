@@ -457,6 +457,7 @@ class WorkerSettings:
     def load(cls):
         """Load settings from config."""
         config = create_scheduler_settings()
+        print("Configs: ", config)
         cls.redis_settings = config["redis_settings"]
         cls.cron_jobs = config["cron_jobs"]
         cls.on_startup = config["on_startup"]

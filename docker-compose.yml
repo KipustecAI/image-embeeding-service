@@ -14,38 +14,38 @@ services:
     networks:
       - embedding-network
 
-  # Image Embedding API Service
-  embedding-api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: embedding-api
-    ports:
-      - "8001:8001"
-    env_file:
-      - .env
-    depends_on:
-      - qdrant
-    networks:
-      - embedding-network
-    command: python -m src.main
+  # # Image Embedding API Service
+  # embedding-api:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   container_name: embedding-api
+  #   ports:
+  #     - "8001:8001"
+  #   env_file:
+  #     - .env
+  #   depends_on:
+  #     - qdrant
+  #   networks:
+  #     - embedding-network
+  #   command: python -m src.main
 
-  # Image Embedding Worker (Scheduler)
-  embedding-worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: embedding-worker
-    env_file:
-      - .env
-    environment:
-      - APP_NAME=Image Embedding Worker
-    depends_on:
-      - qdrant
-      - embedding-api
-    networks:
-      - embedding-network
-    command: python worker.py
+  # # Image Embedding Worker (Scheduler)
+  # embedding-worker:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   container_name: embedding-worker
+  #   env_file:
+  #     - .env
+  #   environment:
+  #     - APP_NAME=Image Embedding Worker
+  #   depends_on:
+  #     - qdrant
+  #     - embedding-api
+  #   networks:
+  #     - embedding-network
+  #   command: python worker.py
 
 networks:
   embedding-network:
