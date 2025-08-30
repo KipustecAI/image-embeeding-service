@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from fastapi import FastAPI, HTTPException, Depends, status, Query
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
-from typing import Optional, List
+from typing import Optional, List, Dict
 from uuid import UUID
 from datetime import datetime
 import uvicorn
@@ -168,9 +168,10 @@ async def search_manual(
     image_url: str,
     threshold: float = 0.75,
     max_results: int = 50,
+    metadata: Optional[Dict] = None,
     _api_key: str = Depends(verify_api_key)
 ):
-    """Manually trigger a similarity search."""
+    """Manually trigger a similarity search with optional metadata filters."""
     try:
         from uuid import UUID
         from src.application.dto import ImageSearchRequest
@@ -180,7 +181,8 @@ async def search_manual(
             user_id=UUID(user_id),
             image_url=image_url,
             threshold=threshold,
-            max_results=max_results
+            max_results=max_results,
+            metadata=metadata  # Pass metadata for camera_id and other filters
         )
         
         response = await scheduler.search_use_case.execute(request)
