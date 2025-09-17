@@ -43,12 +43,14 @@ class QdrantVectorRepository(VectorRepository):
                     host=self.settings.qdrant_host,
                     port=self.settings.qdrant_port,
                     api_key=self.settings.qdrant_api_key,
+                    https=False, # Set to True if using TLS,
                     timeout=30
                 )
             else:
                 self.client = QdrantClient(
                     host=self.settings.qdrant_host,
                     port=self.settings.qdrant_port,
+                    https=False,  # Set to True if using TLS
                     timeout=30
                 )
             
