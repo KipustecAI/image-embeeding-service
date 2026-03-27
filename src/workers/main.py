@@ -21,7 +21,7 @@ def get_redis_settings() -> RedisSettings:
     return RedisSettings(
         host=settings.redis_host,
         port=settings.redis_port,
-        password=settings.redis_password,
+        password=settings.redis_password or None,
         database=settings.redis_database,
         conn_timeout=30,
         conn_retries=5,
