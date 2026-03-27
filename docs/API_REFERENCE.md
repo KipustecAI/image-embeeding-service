@@ -1,328 +1,378 @@
-# API Reference
+# API Reference (v2.0)
 
 Base URL: `http://localhost:8001`
 
-## Authentication
+## Architecture Overview
 
-Most endpoints require the `X-API-Key` header matching the `EMBEDDING_SERVICE_API_KEY` environment variable.
-
-**No auth required:** `GET /`, `GET /health`, `POST /api/v1/embed/evidence`, `GET /api/v1/stats`
-
-**Auth required:** All other endpoints (`/search/manual`, `/process/*`, `/recalculate/*`)
+This is an **event-driven** service. Work arrives via Redis Streams, not HTTP polling:
 
 ```
-X-API-Key: <your-api-key>
+Redis Stream (evidence:embed / evidence:search)
+       │
+       ▼
+  StreamConsumer ──► DB row (status=1) ──► BatchTrigger ──► ARQ Worker
+       │                                                        │
+       │                                                        ▼
+       │                                              Qdrant + PostgreSQL
+       │
+  The HTTP API is for monitoring, manual triggers, and querying results.
+```
+
+## Authentication
+
+Endpoints marked with **Auth** require the `X-API-Key` header:
+
+```
+X-API-Key: <EMBEDDING_SERVICE_API_KEY>
 ```
 
 Missing or invalid keys return `401 Unauthorized`.
 
 ---
 
-## Endpoints
+## Endpoints Summary
 
-### GET / — Service Info
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/` | No | Service info |
+| GET | `/health` | No | Component health check |
+| GET | `/api/v1/stats` | No | Pipeline DB counts + CLIP config |
+| GET | `/api/v1/pipeline/status` | No | Full status (DB counts + triggers + consumers) |
+| POST | `/api/v1/internal/trigger/{name}` | No | Cross-process trigger notification |
+| POST | `/api/v1/recalculate/searches` | Yes | Manually re-queue searches for recalculation |
 
-Returns basic service status. No authentication required.
+---
+
+## GET / — Service Info
+
+No auth. Returns basic service info.
 
 **Response:**
 ```json
 {
   "service": "Image Embedding Service",
+  "version": "2.0.0",
   "status": "running",
-  "environment": "development",
-  "scheduler_enabled": true
+  "environment": "development"
 }
 ```
 
 ---
 
-### GET /health — Health Check
+## GET /health — Health Check
 
-Checks that all components (CLIP embedder, Qdrant, Video Server client) are initialized. Returns Qdrant collection stats. No authentication required.
+No auth. Checks PostgreSQL, scheduler, batch triggers, and stream consumers.
 
 **Response (200):**
 ```json
 {
   "status": "healthy",
   "components": {
-    "embedder": true,
-    "vector_db": true,
-    "api_client": true
+    "database": true,
+    "scheduler": true
   },
-  "vector_db_stats": {
-    "collection": "evidence_embeddings",
-    "points": 1250,
-    "status": "green"
+  "triggers": {
+    "embedding": {
+      "name": "embedding",
+      "running": true,
+      "pending_count": 0,
+      "batch_size": 20,
+      "max_wait_seconds": 5.0,
+      "has_active_timer": false,
+      "total_flushes": 12,
+      "total_events": 45,
+      "flush_reasons": {"batch_full": 2, "timeout": 10, "manual": 0, "shutdown": 0}
+    },
+    "search": { "..." : "same structure" }
+  },
+  "consumers": {
+    "embed": {
+      "stream": "evidence:embed",
+      "group": "embed-workers",
+      "consumer": "hostname-123",
+      "running": true,
+      "thread_alive": true,
+      "messages_processed": 45,
+      "messages_failed": 0,
+      "messages_dead_lettered": 0
+    },
+    "search": { "..." : "same structure" }
   }
 }
 ```
 
-**Response (503):** Service not fully initialized or Qdrant unreachable.
+Returns `"status": "degraded"` if any component is down.
 
 ---
 
-### GET /api/v1/stats — Service Statistics
+## GET /api/v1/stats — Service Statistics
 
-Returns Qdrant collection details and current CLIP configuration.
+No auth. Returns pipeline request counts by status and CLIP configuration.
 
 **Response:**
 ```json
 {
   "service": "Image Embedding Service",
-  "vector_database": {
-    "collection_name": "evidence_embeddings",
-    "vector_size": 512,
-    "distance_metric": "Cosine",
-    "points_count": 1250,
-    "indexed_vectors_count": 1250,
-    "status": "green"
+  "pipeline": {
+    "embedding_requests": {
+      "to_work": 0,
+      "working": 2,
+      "embedded": 35,
+      "done": 120,
+      "error": 3
+    },
+    "search_requests": {
+      "to_work": 0,
+      "working": 0,
+      "completed": 18,
+      "error": 1
+    }
   },
   "configuration": {
     "model": "ViT-B-32",
-    "device": "cpu",
-    "vector_size": 512,
-    "evidence_batch_size": 50,
-    "search_batch_size": 10
+    "device": "cuda",
+    "vector_size": 512
   }
 }
 ```
 
 ---
 
-### POST /api/v1/embed/evidence — Embed Single Evidence
+## GET /api/v1/pipeline/status — Full Pipeline Status
 
-Manually embed a single evidence image. Downloads the image, generates a CLIP embedding, stores it in Qdrant, and marks the evidence as embedded (status=4) in the Video Server.
+No auth. Combined view for monitoring and E2E test scripts. Includes DB counts, trigger metrics, and consumer health in one call.
 
-**Query Parameters:**
-
-| Parameter    | Type   | Required | Description                  |
-|-------------|--------|----------|------------------------------|
-| evidence_id | string | yes      | UUID of the evidence         |
-| image_url   | string | yes      | URL of the image to embed    |
-| camera_id   | string | yes      | UUID of the source camera    |
-
-**Response (200):**
+**Response:**
 ```json
 {
-  "success": true,
-  "evidence_id": "550e8400-e29b-41d4-a716-446655440000",
-  "embedding_id": "emb_550e8400",
-  "vector_dimension": 512
-}
-```
-
-**Errors:** `400` invalid UUID format, `500` embedding or storage failure.
-
----
-
-### POST /api/v1/process/evidences — Batch Process Evidences
-
-Fetches all evidences with `status=3` (FOUND) from the Video Server and processes them in batch. This is the same operation the ARQ scheduler runs every 10 minutes.
-
-**Response (200):**
-```json
-{
-  "success": true,
-  "total_processed": 12,
-  "successful": 11,
-  "failed": 1,
-  "processing_time_ms": 4520.5
+  "status_counts": {
+    "embedding": { "to_work": 0, "working": 0, "embedded": 35, "done": 120, "error": 3 },
+    "search": { "to_work": 0, "working": 0, "completed": 18, "error": 1 }
+  },
+  "triggers": {
+    "embedding": { "total_flushes": 12, "total_events": 45, "pending_count": 0, "..." : "..." },
+    "search": { "total_flushes": 5, "total_events": 18, "pending_count": 0, "..." : "..." }
+  },
+  "consumers": {
+    "embed": { "running": true, "messages_processed": 45, "messages_failed": 0, "..." : "..." },
+    "search": { "running": true, "messages_processed": 18, "messages_failed": 0, "..." : "..." }
+  }
 }
 ```
 
 ---
 
-### POST /api/v1/search/manual — Manual Similarity Search
+## POST /api/v1/internal/trigger/{trigger_name} — Notify Trigger
 
-Submit an image and find visually similar evidence in the vector database. Generates a CLIP embedding for the query image, searches Qdrant with cosine similarity, and returns the top matches.
-
-**Query Parameters:**
-
-| Parameter   | Type   | Required | Default | Description                          |
-|------------|--------|----------|---------|--------------------------------------|
-| search_id  | string | yes      |         | UUID for this search                 |
-| user_id    | string | yes      |         | UUID of the requesting user          |
-| image_url  | string | yes      |         | URL of the image to search with      |
-| threshold  | float  | no       | 0.75    | Minimum cosine similarity (0.0-1.0)  |
-| max_results| int    | no       | 50      | Maximum number of results            |
-| metadata   | object | no       | null    | Filter conditions (see below)        |
-
-**Metadata Filters:**
-
-Pass as a JSON object to narrow search results:
-
-```json
-{
-  "camera_id": "uuid-string",
-  "object_type": "vehicle",
-  "date_from": "2025-08-01T00:00:00Z",
-  "date_to": "2025-08-31T23:59:59Z",
-  "text_description": "red car near building"
-}
-```
-
-Filters only apply if the corresponding metadata exists in the Qdrant payloads.
-
-**Response (200):**
-```json
-{
-  "success": true,
-  "search_id": "660e8400-e29b-41d4-a716-446655440000",
-  "total_matches": 5,
-  "search_time_ms": 234.7,
-  "results": [
-    {
-      "evidence_id": "550e8400-e29b-41d4-a716-446655440000",
-      "similarity_score": 0.92,
-      "image_url": "https://example.com/evidence_crop.jpg"
-    }
-  ]
-}
-```
-
-The response includes up to 10 results inline. Full results are stored in Redis via the Video Server.
-
----
-
-### POST /api/v1/process/searches — Batch Process Searches
-
-Fetches all pending searches (`status=1`) from the Video Server and processes them. Same operation the ARQ scheduler runs every 1 minute.
-
-**Response (200):**
-```json
-{
-  "success": true,
-  "total_processed": 3,
-  "successful": 3,
-  "failed": 0
-}
-```
-
----
-
-### POST /api/v1/recalculate/searches — Recalculate Searches
-
-Re-run completed searches against the current vector database. Useful when new evidence has been embedded since the original search.
-
-Supports three modes:
-1. **Specific IDs** — provide `search_ids` to recalculate specific searches
-2. **Batch** — use `limit` and `hours_old` to recalculate a batch
-3. **All** — set `force_all=true` to recalculate all eligible searches
-
-Eligible searches: `search_status=3` (COMPLETED).
-
-**Query Parameters:**
-
-| Parameter  | Type     | Required | Default | Description                                  |
-|-----------|----------|----------|---------|----------------------------------------------|
-| search_ids| string[] | no       | null    | Specific search UUIDs to recalculate         |
-| limit     | int      | no       | 10      | Max searches to recalculate (1-100)          |
-| hours_old | int      | no       | null    | Only recalculate if processed > X hours ago  |
-| force_all | bool     | no       | false   | Recalculate ALL eligible searches            |
-
-**Response (200):**
-```json
-{
-  "success": true,
-  "message": "Recalculated 5 searches",
-  "total_processed": 5,
-  "successful": 5,
-  "failed": 0,
-  "mode": "batch",
-  "search_ids": null
-}
-```
-
----
-
-### POST /api/v1/recalculate/search/{search_id} — Recalculate Single Search
-
-Convenience endpoint to recalculate one search by ID. Delegates to the batch recalculation endpoint internally.
+No auth. Called by the ARQ worker (separate process) to notify in-memory batch triggers. The worker cannot access triggers directly since they live in the API process memory.
 
 **Path Parameters:**
 
-| Parameter | Type   | Description              |
-|----------|--------|--------------------------|
-| search_id| string | UUID of the search       |
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| trigger_name | string | `embedding` or `search` |
 
-**Response:** Same format as the batch recalculate endpoint.
+**Query Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| count | int | 1 | Number of items to notify |
+
+**Response (200):**
+```json
+{
+  "notified": true,
+  "trigger": "embedding",
+  "count": 5
+}
+```
+
+**Response (404):** Trigger name not found.
 
 ---
 
-## Processing Flows
+## POST /api/v1/recalculate/searches — Recalculate Searches
 
-### Evidence Embedding (automatic every 10 min)
+**Auth required.** Re-queues completed searches back to `status=1` so the pipeline reprocesses them against the current Qdrant state. Useful when new evidence has been embedded since the original search.
+
+Eligible searches: `status=COMPLETED` + `similarity_status=MATCHES_FOUND` + processed more than `hours_old` ago.
+
+**Query Parameters:**
+
+| Parameter | Type | Default | Range | Description |
+|-----------|------|---------|-------|-------------|
+| limit | int | 20 | 1-100 | Max searches to recalculate |
+| hours_old | int | 2 | 1-168 | Only searches processed > X hours ago |
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "message": "Queued 5 searches for recalculation",
+  "total": 5
+}
+```
+
+**Response (200, nothing to do):**
+```json
+{
+  "success": true,
+  "message": "No searches eligible",
+  "total": 0
+}
+```
+
+---
+
+## Event-Driven Processing Flows
+
+### Evidence Embedding
+
+Input arrives via Redis Stream `evidence:embed`, not HTTP.
 
 ```
-Video Server                    Embedding Service                  Qdrant
-     |                                |                              |
-     |  GET evidences (status=3)      |                              |
-     |<-------------------------------|                              |
-     |  return [{id, camera_id, urls}]|                              |
-     |------------------------------->|                              |
-     |                                |  download images             |
-     |                                |  generate CLIP vectors       |
-     |                                |  upsert(id, vector, meta)    |
-     |                                |----------------------------->|
-     |                                |                         ok   |
-     |                                |<-----------------------------|
-     |  PATCH status = 4 (EMBEDDED)   |                              |
-     |<-------------------------------|                              |
+Video Server / ETL
+       │
+       │ XADD evidence:embed { evidence.ready.embed, payload: { evidence_id, camera_id, image_urls } }
+       ▼
+  StreamConsumer (daemon thread)
+       │
+       ├─ Dedup check (evidence_id already in DB?)
+       ├─ Diversity filter (Bhattacharyya histogram, skip near-duplicate crops)
+       ├─ Create embedding_request row (status=1)
+       └─ BatchTrigger.notify()
+              │
+              ├─ Flush when count >= 20 OR timeout 5s
+              ▼
+         ARQ Worker: process_evidence_embeddings_batch
+              │
+              ├─ Phase 1: Parallel image download + CLIP embed (asyncio.gather)
+              ├─ Phase 2: Bulk Qdrant upsert (1 call) + bulk DB commit (1 call)
+              └─ Update status → EMBEDDED (3)
 ```
 
-### Image Search (automatic every 1 min)
+### Image Search
+
+Input arrives via Redis Stream `evidence:search`.
 
 ```
-Video Server                    Embedding Service                  Qdrant
-     |                                |                              |
-     |  GET searches (status=1)       |                              |
-     |<-------------------------------|                              |
-     |  return [{id, image_url, ...}] |                              |
-     |------------------------------->|                              |
-     |  PATCH status = 2 (PROGRESS)   |                              |
-     |<-------------------------------|                              |
-     |                                |  download query image        |
-     |                                |  generate CLIP vector        |
-     |                                |  search(vector, threshold)   |
-     |                                |----------------------------->|
-     |                                |  return [{id, score}]        |
-     |                                |<-----------------------------|
-     |  POST results -> Redis cache   |                              |
-     |<-------------------------------|                              |
-     |  PATCH status = 3 (COMPLETED)  |                              |
-     |  similarity = 1 (none) | 2 (found)                            |
-     |<-------------------------------|                              |
+Video Server
+       │
+       │ XADD evidence:search { search.created, payload: { search_id, user_id, image_url, threshold, metadata } }
+       ▼
+  StreamConsumer (daemon thread)
+       │
+       ├─ Dedup check
+       ├─ Create search_request row (status=1)
+       └─ BatchTrigger.notify()
+              │
+              ▼
+         ARQ Worker: process_image_searches_batch
+              │
+              ├─ Download query image + CLIP embed
+              ├─ Qdrant similarity search (cosine, with metadata filters)
+              └─ Update status → COMPLETED (3), set similarity_status + total_matches
 ```
+
+## Safety Nets (Background Jobs)
+
+These run automatically via APScheduler inside the API process:
+
+| Job | Interval | Purpose |
+|-----|----------|---------|
+| `embedding_safety_net` | 60s | Catch status=1 embedding rows missed by BatchTrigger |
+| `search_safety_net` | 120s | Catch status=1 search rows missed by BatchTrigger |
+| `recover_stale_working` | 5m | Reset status=2 rows stuck >10min back to status=1 |
+| `recalculate_searches` | 1h | Re-queue old completed searches for reprocessing |
+| `cleanup_old_requests` | 24h | Delete completed/error rows older than 30 days |
+
+## Database Tables
+
+### embedding_requests
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | UUID | Primary key |
+| evidence_id | string | External evidence reference (indexed) |
+| camera_id | string | Source camera (indexed) |
+| status | int | Pipeline status (indexed) |
+| image_urls | JSONB | List of image URLs to embed |
+| worker_id | string | Which worker picked it up |
+| error_message | text | Error details if failed |
+| retry_count | int | Times retried |
+| stream_message_id | string | Redis Stream message ID |
+| created_at | datetime | Row creation time (indexed) |
+
+### evidence_embeddings
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | UUID | Primary key |
+| request_id | UUID | FK → embedding_requests |
+| qdrant_point_id | string | Qdrant vector ID (unique, indexed) |
+| image_index | int | Which image in the evidence |
+| image_url | text | Source image URL |
+| json_data | JSONB | Metadata stored in Qdrant |
+
+### search_requests
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | UUID | Primary key |
+| search_id | string | External search reference (indexed) |
+| user_id | string | Requesting user (indexed) |
+| image_url | text | Query image URL |
+| status | int | Pipeline status (indexed) |
+| similarity_status | int | 1=NO_MATCHES, 2=MATCHES_FOUND |
+| threshold | float | Cosine similarity threshold |
+| max_results | int | Max results to return |
+| search_metadata | JSONB | Filters (camera_id, date range, etc.) |
+| total_matches | int | Number of matches found |
+
+## Status Codes
+
+### Embedding Requests
+
+| Status | Name | Description |
+|--------|------|-------------|
+| 1 | TO_WORK | Created, waiting for BatchTrigger to dispatch |
+| 2 | WORKING | Picked up by ARQ worker |
+| 3 | EMBEDDED | CLIP vectors stored in Qdrant |
+| 4 | DONE | Fully processed |
+| 5 | ERROR | Failed (see error_message) |
+
+### Search Requests
+
+| Status | Name | Description |
+|--------|------|-------------|
+| 1 | TO_WORK | Created, waiting for dispatch |
+| 2 | WORKING | Picked up by ARQ worker |
+| 3 | COMPLETED | Search executed, results stored |
+| 4 | ERROR | Failed (see error_message) |
+
+### Similarity Status
+
+| Status | Name |
+|--------|------|
+| 1 | NO_MATCHES |
+| 2 | MATCHES_FOUND |
 
 ## Qdrant Payload Structure
 
-Each stored embedding has the following metadata in Qdrant:
+Each stored embedding in the `evidence_embeddings` collection:
 
 ```json
 {
+  "source_type": "evidence",
   "evidence_id": "uuid-string",
   "camera_id": "uuid-string",
   "image_index": 0,
   "total_images": 3,
-  "image_url": "https://example.com/image.jpg",
-  "created_at": "2025-08-28T17:00:00Z",
-  "source_type": "evidence"
+  "image_url": "https://storage.example.com/crop.jpg",
+  "created_at": "2026-03-27T12:00:00Z"
 }
 ```
 
-Indexed fields (used for filtering): `source_type`, `camera_id`, `evidence_id`.
+**Indexed fields:** `source_type`, `camera_id`, `evidence_id`.
 
-## Status Codes Reference
-
-| Entity      | Status | Meaning       |
-|------------|--------|---------------|
-| Evidence   | 1      | TO_WORK       |
-| Evidence   | 2      | IN_PROGRESS   |
-| Evidence   | 3      | FOUND         |
-| Evidence   | 4      | EMBEDDED      |
-| Search     | 1      | TO_WORK       |
-| Search     | 2      | IN_PROGRESS   |
-| Search     | 3      | COMPLETED     |
-| Search     | 4      | FAILED        |
-| Similarity | 1      | NO_MATCHES    |
-| Similarity | 2      | MATCHES_FOUND |
+**Vector:** 512-dimensional CLIP ViT-B-32, cosine distance.
