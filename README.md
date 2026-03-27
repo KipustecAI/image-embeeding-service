@@ -1,392 +1,154 @@
-# Image Embedding Service
+# Image Embedding Backend
 
-A microservice for processing and embedding images from evidences and user searches, utilizing vector similarity search with Qdrant and CLIP model.
+Pipeline orchestration, vector storage, and API for the image embedding system. Consumes pre-computed CLIP vectors from the [embedding-compute](../embedding-compute/) GPU service, stores them in Qdrant, and executes similarity searches.
+
+**No GPU. No CLIP model. Just storage + API.**
 
 ## Architecture
 
-The service follows Clean Architecture principles:
-
 ```
-Domain Layer � Application Layer � Infrastructure Layer � Presentation Layer
+embedding-compute (GPU)                     this service (CPU)
+┌─────────────────────┐                    ┌──────────────────────────┐
+│ evidence:embed ──►  │                    │                          │
+│   download + filter │  embeddings:results│  StreamConsumer           │
+│   CLIP inference  ──┼───────────────────►│  ├─ Store in Qdrant      │
+│                     │                    │  ├─ Update PostgreSQL    │
+│ evidence:search ──► │  search:results    │  └─ Execute searches     │
+│   CLIP inference  ──┼───────────────────►│                          │
+└─────────────────────┘                    │  FastAPI API (port 8001) │
+                                           │  PostgreSQL + Qdrant     │
+                                           └──────────────────────────┘
 ```
 
-## Components
+## Quick Start
 
-### Core Technologies
+```bash
+# 1. Start infrastructure
+make docker-up
 
-- **CLIP Model**: Using `clip-ViT-B-32` for generating 512-dimensional embeddings
-- **Qdrant**: Vector database for storing and searching embeddings
-- **Redis**: Task scheduling and caching
-- **ARQ**: Async task scheduler for periodic processing
-- **FastAPI**: REST API endpoints
+# 2. Run database migrations
+make migrate
 
-### Main Features
+# 3. Start the backend (API + worker in tmux)
+make run
 
-1. **Evidence Embedding**: Process camera evidence images (status=3) and store embeddings
-2. **Image Search**: Process user-submitted images and find similar evidences
-3. **Scheduled Processing**: Automatic periodic processing of pending tasks
-4. **Manual Triggers**: API endpoints for manual processing
+# Or in separate terminals:
+make run-api      # Terminal 1: FastAPI server
+make run-worker   # Terminal 2: ARQ storage worker
+```
 
-## Setup
+The compute service must also be running separately (see [embedding-compute](../embedding-compute/)).
 
-### Prerequisites
+## Prerequisites
 
 - Python 3.11+
-- Docker and Docker Compose
-- Access to main Video Server API (DEV or ROOT role API key required)
+- Docker (for PostgreSQL, Redis, Qdrant)
+- The [embedding-compute](../embedding-compute/) service running (for CLIP inference)
 
-### Security Configuration
+## Configuration
 
-The service requires API key authentication for all endpoints (except health checks). Configure the following:
-
-1. **Service API Key**: Set `EMBEDDING_SERVICE_API_KEY` in `.env`
-
-   - Generate a secure key: `python -c "import secrets; print('emb_service_key_' + secrets.token_urlsafe(32))"`
-   - This key must be provided in the `X-API-Key` header for all requests
-
-2. **Main Server Integration**: Configure the same API key in the main video server's `.env` file
-
-### Installation
-
-1. Clone the repository:
-
-```bash
-cd microservices/image_embedding_service
-```
-
-2. Create `.env` file from example:
-
-```bash
-cp .env.example .env
-# Edit .env with your configuration
-```
-
-3. Install dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-### Configuration
-
-Key environment variables:
+Copy `.env.dev` for local development or create `.env`:
 
 ```env
-# Main Video Server API
-VIDEO_SERVER_BASE_URL=http://localhost:8000
-VIDEO_SERVER_API_KEY=vsk_dev_your_key_here  # Must be DEV or ROOT role
+# Database
+DATABASE_URL=postgresql+asyncpg://embed_user:embed_pass@localhost:5433/embedding_service
 
-# Qdrant Vector Database
+# Qdrant
 QDRANT_HOST=localhost
 QDRANT_PORT=6333
-QDRANT_COLLECTION_NAME=evidence_embeddings
 
-# Redis Configuration
+# Redis
 REDIS_HOST=localhost
 REDIS_PORT=6379
-REDIS_PASSWORD=your_password
 REDIS_DATABASE=5
 
-# Scheduler Settings
-SCHEDULER_ENABLED=true
-EVIDENCE_CHECK_INTERVAL=600  # 10 minutes
-IMAGE_SEARCH_CHECK_INTERVAL=30  # 30 seconds
-
-# CLIP Model
-CLIP_MODEL_NAME=ViT-B-32
-CLIP_DEVICE=cpu  # or cuda for GPU
+# Streams (output from compute service)
+REDIS_STREAMS_DB=3
+STREAM_EMBEDDINGS_RESULTS=embeddings:results
+STREAM_SEARCH_RESULTS=search:results
+STREAM_BACKEND_GROUP=backend-workers
 ```
 
-## Running the Service
-
-### Using Docker Compose (Recommended)
-
-```bash
-# Start all services
-docker-compose up -d
-
-# View logs
-docker-compose logs -f
-
-# Stop services
-docker-compose down
-```
-
-This starts:
-
-- Qdrant vector database (port 6333)
-- Redis for scheduling (port 6380)
-- API service (port 8001)
-- Worker for scheduled tasks
-
-### Local Development
-
-1. Start Qdrant:
-
-```bash
-docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant
-```
-
-2. Start Redis:
-
-```bash
-redis-server --requirepass your_password
-```
-
-3. Run API server:
-
-```bash
-python -m src.main
-```
-
-4. Run worker (in separate terminal):
-
-```bash
-python worker.py
-```
+See `.env` for all available settings.
 
 ## API Endpoints
 
-### Health & Status
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/` | No | Service info |
+| GET | `/health` | No | Component health (DB, scheduler, triggers, consumers) |
+| GET | `/api/v1/stats` | No | Pipeline request counts + config |
+| GET | `/api/v1/pipeline/status` | No | Full status (counts + triggers + consumers) |
+| POST | `/api/v1/internal/trigger/{name}` | No | Cross-process trigger notification |
+| POST | `/api/v1/recalculate/searches` | Yes | Re-queue searches for recalculation |
 
-- `GET /` - Service info
-- `GET /health` - Health check with component status
-- `GET /api/v1/stats` - Service statistics
+See [docs/API_REFERENCE.md](docs/API_REFERENCE.md) for full details and [docs/CURL_EXAMPLES.md](docs/CURL_EXAMPLES.md) for usage examples.
 
-### Manual Processing
+## Data Flow
 
-- `POST /api/v1/embed/evidence` - Manually embed a specific evidence
+1. **Video Server** publishes events to Redis Streams (`evidence:embed`, `evidence:search`)
+2. **embedding-compute** (GPU) downloads images, runs CLIP, publishes vectors to `embeddings:results` / `search:results`
+3. **This service** consumes vectors, stores in Qdrant + PostgreSQL, executes searches
 
-  ```json
-  {
-    "evidence_id": "uuid",
-    "image_url": "https://...",
-    "camera_id": "uuid"
-  }
-  ```
+## Background Jobs (Safety Nets)
 
-- `POST /api/v1/search/manual` - Manually process a search
+| Job | Interval | Purpose |
+|-----|----------|---------|
+| Embedding safety net | 60s | Catch missed embedding rows |
+| Search safety net | 120s | Catch missed search rows |
+| Stale recovery | 5m | Reset stuck WORKING rows |
+| Recalculation | 1h | Re-run old searches against new evidence |
+| Cleanup | 24h | Delete rows older than 30 days |
 
-  ```json
-  {
-    "search_id": "uuid",
-    "user_id": "uuid",
-    "image_url": "https://...",
-    "threshold": 0.75,
-    "max_results": 50
-  }
-  ```
+## Database
 
-- `POST /api/v1/process/evidences` - Process batch of evidences
-- `POST /api/v1/process/searches` - Process pending searches
+Three PostgreSQL tables managed by Alembic:
 
-### Recalculation Endpoints
-
-- `POST /api/v1/recalculate/searches` - Recalculate multiple searches
-
-  - Query params: `search_ids`, `limit`, `hours_old`, `force_all`
-  - Example: `/api/v1/recalculate/searches?limit=10&hours_old=2`
-
-- `POST /api/v1/recalculate/search/{search_id}` - Recalculate single search
-  - Example: `/api/v1/recalculate/search/abc123-def456`
-
-## Processing Flow
-
-### Evidence Embedding Flow
-
-1. Scheduler fetches evidences with `status=3` from main API
-2. Downloads and processes images through CLIP model
-3. Stores 512-dimensional vectors in Qdrant
-4. Updates evidence status to `4` (EMBEDDED) in main API
-
-### Image Search Flow
-
-1. Scheduler fetches pending searches (`status=1`) from main API
-2. Generates embedding for search image
-3. Searches Qdrant for similar evidence embeddings
-4. Stores results in Redis cache via main API
-5. Updates search status to `3` (COMPLETED)
-
-## Scheduled Tasks
-
-The worker runs these tasks periodically using ARQ scheduler with 4 configured cron jobs:
-
-### Active Cron Jobs
-
-1. **process_evidence_embeddings** - Running every 10 minutes
-
-   - Processes up to 50 evidences per batch
-   - Only processes images with status=3 (FOUND)
-   - Runs at startup: Yes
-
-2. **process_image_searches** - Running every minute
-
-   - Processes up to 10 pending searches per batch
-   - Stores results with configurable TTL in Redis
-   - Runs at startup: Yes
-
-3. **update_vector_statistics** - Running every hour at minute 0
-
-   - Updates vector database statistics
-   - Monitors collection health and point counts
-   - Runs at startup: Yes
-
-4. **recalculate_searches** - Running every hour at minute 15
-   - Recalculates completed searches when new evidence is available
-   - Only processes searches older than 2 hours
-   - Fetches up to 20 searches per batch
-   - Only recalculates COMPLETED searches with MATCHES_FOUND status
-   - Runs at startup: No (to avoid unnecessary load)
-
-### Search Recalculation Feature
-
-The recalculation task ensures search results stay up-to-date as new evidence is added:
-
-**Configuration:**
-
-```env
-# Enable/disable automatic recalculation
-RECALCULATION_ENABLED=true  # Set to false to disable
-
-# How often to run recalculation (seconds)
-RECALCULATION_INTERVAL=3600  # 1 hour
-
-# Only recalculate searches older than X hours
-RECALCULATION_HOURS_OLD=2
-
-# Batch size per recalculation run
-RECALCULATION_BATCH_SIZE=20
-```
-
-**Schedule Details:**
-
-- Runs every hour at minute 15 (00:15, 01:15, 02:15, etc.)
-- Avoids collision with vector statistics task (runs at minute 0)
-- Can be manually triggered via API endpoints
-
-### Verifying Scheduler Operation
-
-1. **Check scheduler configuration:**
+- `embedding_requests` — tracks each evidence through the pipeline
+- `evidence_embeddings` — one row per vector stored in Qdrant
+- `search_requests` — tracks each similarity search
 
 ```bash
-docker exec -it <container-id> python test_scheduler_config.py
+make migrate          # Apply migrations
+make migrate-create msg="add new table"  # Create new migration
+make migrate-history  # Show migration history
 ```
 
-2. **Monitor recalculation task logs:**
+## Testing
 
 ```bash
-docker logs -f <container-id> 2>&1 | grep -i recalculate
+# Integration tests (requires Docker services running)
+make test
+
+# Full pipeline test with example payload
+make test-pipeline
+
+# Similarity report (heatmap + search visualization)
+python scripts/generate_similarity_report.py
 ```
 
-3. **Manually trigger recalculation:**
-
-```bash
-docker exec -it <container-id> python test_recalculation.py
-```
-
-4. **View all scheduled tasks:**
-
-```bash
-docker exec -it <container-id> python -c "
-from src.infrastructure.scheduler.arq_scheduler import create_scheduler_settings
-import pprint
-config = create_scheduler_settings()
-for job in config['cron_jobs']:
-    print(f'{job.coroutine_func.__name__}: runs at minute {job.minute}')
-"
-```
-
-The scheduled recalculation feature is fully integrated and will automatically keep search results up-to-date as new evidence arrives!
-
-## Development
-
-### Project Structure
+## Project Structure
 
 ```
 src/
- domain/           # Core business logic
-    entities/     # Domain models
-    repositories/ # Repository interfaces
- application/      # Use cases
-    use_cases/    # Business operations
-    dto/          # Data transfer objects
- infrastructure/   # External services
-    embedding/    # CLIP embedder
-    vector_db/    # Qdrant repository
-    api/          # Video server client
-    scheduler/    # ARQ scheduler
- main.py          # FastAPI application
+├── main.py                              # FastAPI app + lifespan
+├── api/dependencies.py                  # API key auth
+├── db/
+│   ├── models/                          # SQLAlchemy models
+│   └── repositories/                    # DB queries (FOR UPDATE SKIP LOCKED)
+├── infrastructure/
+│   ├── config.py                        # Pydantic settings
+│   ├── database.py                      # Async SQLAlchemy engine
+│   └── vector_db/qdrant_repository.py   # Qdrant client
+├── streams/
+│   ├── consumer.py                      # Generic Redis Streams consumer
+│   ├── embedding_results_consumer.py    # embeddings:results → DB + trigger
+│   └── search_results_consumer.py       # search:results → DB + trigger
+├── services/
+│   ├── batch_trigger.py                 # Signal-driven batch dispatcher
+│   └── safety_nets.py                   # Scheduled fallback jobs
+└── workers/
+    ├── main.py                          # ARQ worker settings
+    ├── embedding_worker.py              # Bulk Qdrant upsert + DB
+    └── search_worker.py                 # Qdrant search + DB
 ```
-
-### Testing
-
-Run tests:
-
-```bash
-pytest tests/ -v
-```
-
-Test manual embedding:
-
-```bash
-curl -X POST "http://localhost:8001/api/v1/embed/evidence" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "evidence_id": "550e8400-e29b-41d4-a716-446655440000",
-    "image_url": "https://example.com/image.jpg",
-    "camera_id": "660e8400-e29b-41d4-a716-446655440000"
-  }'
-```
-
-## Monitoring
-
-### Logs
-
-- Application logs: `docker-compose logs embedding-api`
-- Worker logs: `docker-compose logs embedding-worker`
-- Qdrant logs: `docker-compose logs qdrant`
-
-### Metrics
-
-- Vector DB stats: `GET /api/v1/stats`
-- Collection info: Check Qdrant dashboard at `http://localhost:6333/dashboard`
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Connection to Video Server API fails**
-
-   - Check `VIDEO_SERVER_BASE_URL` and `VIDEO_SERVER_API_KEY`
-   - Ensure API key has DEV or ROOT role
-
-2. **Qdrant connection issues**
-
-   - Ensure Qdrant is running: `docker ps | grep qdrant`
-   - Check port 6333 is accessible
-
-3. **Out of memory errors**
-
-   - Reduce `CLIP_BATCH_SIZE` (default: 32)
-   - Switch to CPU if using CUDA: `CLIP_DEVICE=cpu`
-
-4. **Slow processing**
-   - Enable GPU: `CLIP_DEVICE=cuda`
-   - Increase batch sizes if memory allows
-
-## Performance
-
-- **Embedding Generation**: ~100-200ms per image (CPU), ~20-50ms (GPU)
-- **Vector Search**: <50ms for 100k vectors
-- **Batch Processing**: 50 images in ~10s (CPU), ~2s (GPU)
-
-## Security
-
-- API key must have DEV or ROOT role for internal endpoints
-- Qdrant can be secured with API key in production
-- Redis password is required in production
-- Images are validated before processing (size, format)
-
-## License
-
-Part of the Video Server project.

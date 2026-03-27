@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""ARQ worker entry point — processes embedding and search jobs."""
+"""ARQ storage worker — stores vectors in Qdrant and executes searches."""
 
 import sys
 from pathlib import Path
