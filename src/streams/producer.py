@@ -2,7 +2,6 @@
 
 import json
 import logging
-from typing import Optional
 
 import redis
 
@@ -14,7 +13,7 @@ class StreamProducer:
         self,
         redis_host: str = "localhost",
         redis_port: int = 6379,
-        redis_password: Optional[str] = None,
+        redis_password: str | None = None,
         redis_db: int = 3,
     ):
         self._redis = redis.Redis(

@@ -2,10 +2,9 @@
 
 import logging
 from datetime import datetime, timedelta
-from typing import List, Optional
 from uuid import UUID
 
-from sqlalchemy import and_, select, func
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -22,7 +21,7 @@ class SearchRequestRepository:
 
     async def get_pending_requests(
         self, limit: int = 10, max_retries: int = 3
-    ) -> List[SearchRequest]:
+    ) -> list[SearchRequest]:
         """Get TO_WORK search requests with FOR UPDATE SKIP LOCKED."""
         query = (
             select(SearchRequest)
@@ -56,8 +55,8 @@ class SearchRequestRepository:
         image_url: str,
         threshold: float = 0.75,
         max_results: int = 50,
-        metadata: Optional[dict] = None,
-        stream_msg_id: Optional[str] = None,
+        metadata: dict | None = None,
+        stream_msg_id: str | None = None,
     ) -> SearchRequest:
         """Create new search request at status=1."""
         request = SearchRequest(
@@ -75,7 +74,7 @@ class SearchRequestRepository:
 
     async def get_stale_working(
         self, stale_minutes: int = 10
-    ) -> List[SearchRequest]:
+    ) -> list[SearchRequest]:
         """Find search requests stuck in WORKING for too long."""
         cutoff = datetime.utcnow() - timedelta(minutes=stale_minutes)
         query = select(SearchRequest).where(
@@ -89,7 +88,7 @@ class SearchRequestRepository:
 
     async def get_for_recalculation(
         self, hours_old: int = 2, limit: int = 20
-    ) -> List[SearchRequest]:
+    ) -> list[SearchRequest]:
         """Get completed searches eligible for recalculation."""
         cutoff = datetime.utcnow() - timedelta(hours=hours_old)
         query = (
@@ -107,10 +106,10 @@ class SearchRequestRepository:
         result = await self.session.execute(query)
         return list(result.scalars().all())
 
-    async def get_by_id(self, request_id: UUID) -> Optional[SearchRequest]:
+    async def get_by_id(self, request_id: UUID) -> SearchRequest | None:
         return await self.session.get(SearchRequest, request_id)
 
-    async def get_by_search_id(self, search_id: str) -> Optional[SearchRequest]:
+    async def get_by_search_id(self, search_id: str) -> SearchRequest | None:
         """Fetch by external search_id with matches eagerly loaded."""
         query = (
             select(SearchRequest)
@@ -123,7 +122,7 @@ class SearchRequestRepository:
 
     async def get_by_user_id(
         self, user_id: str, limit: int = 20, offset: int = 0
-    ) -> List[SearchRequest]:
+    ) -> list[SearchRequest]:
         """List searches by user, most recent first."""
         query = (
             select(SearchRequest)
@@ -146,7 +145,7 @@ class SearchRequestRepository:
 
     async def get_matches(
         self, search_request_id, limit: int = 20, offset: int = 0
-    ) -> List[SearchMatch]:
+    ) -> list[SearchMatch]:
         """Get paginated matches for a search, sorted by score descending."""
         query = (
             select(SearchMatch)

@@ -1,7 +1,6 @@
 """API dependencies — user context from API Gateway headers."""
 
 from dataclasses import dataclass
-from typing import Optional
 
 from fastapi import Request
 
@@ -11,8 +10,8 @@ class UserContext:
     user_id: str
     role: str
     scopes: list[str]
-    created_by: Optional[str]
-    app_type: Optional[int]
+    created_by: str | None
+    app_type: int | None
     request_id: str
 
     @property

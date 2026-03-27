@@ -5,18 +5,17 @@ Creates EmbeddingRequest DB rows and notifies the BatchTrigger.
 
 import asyncio
 import logging
-from typing import Dict, Optional
 
+from ..db.repositories import EmbeddingRequestRepository
 from ..infrastructure.config import get_settings
 from ..infrastructure.database import get_session
-from ..db.repositories import EmbeddingRequestRepository
 from .consumer import StreamConsumer
 
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
-_event_loop: Optional[asyncio.AbstractEventLoop] = None
+_event_loop: asyncio.AbstractEventLoop | None = None
 
 
 def set_event_loop(loop: asyncio.AbstractEventLoop):
@@ -43,7 +42,7 @@ def create_evidence_embed_consumer() -> StreamConsumer:
     return consumer
 
 
-def _handle_evidence_ready(event_type: str, payload: Dict, message_id: str):
+def _handle_evidence_ready(event_type: str, payload: dict, message_id: str):
     """Called from daemon thread — bridge to asyncio."""
     if _event_loop is None:
         logger.error("Event loop not set — call set_event_loop() at startup")
@@ -56,7 +55,7 @@ def _handle_evidence_ready(event_type: str, payload: Dict, message_id: str):
     future.result(timeout=300)
 
 
-async def _process_evidence_embed(payload: Dict, message_id: str):
+async def _process_evidence_embed(payload: dict, message_id: str):
     """Create an EmbeddingRequest row and notify the batch trigger."""
     evidence_id = payload.get("evidence_id", "")
     camera_id = payload.get("camera_id", "")

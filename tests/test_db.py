@@ -13,8 +13,8 @@ class TestDatabaseModels:
 
     @pytest.mark.asyncio
     async def test_create_embedding_request(self):
-        from src.infrastructure.database import get_session
         from src.db.repositories import EmbeddingRequestRepository
+        from src.infrastructure.database import get_session
 
         async with get_session() as session:
             repo = EmbeddingRequestRepository(session)
@@ -36,8 +36,8 @@ class TestDatabaseModels:
 
     @pytest.mark.asyncio
     async def test_create_search_request(self):
-        from src.infrastructure.database import get_session
         from src.db.repositories import SearchRequestRepository
+        from src.infrastructure.database import get_session
 
         async with get_session() as session:
             repo = SearchRequestRepository(session)
@@ -54,8 +54,8 @@ class TestDatabaseModels:
 
     @pytest.mark.asyncio
     async def test_dedup_check(self):
-        from src.infrastructure.database import get_session
         from src.db.repositories import EmbeddingRequestRepository
+        from src.infrastructure.database import get_session
 
         evidence_id = f"dedup-test-{uuid4()}"
 
@@ -75,8 +75,8 @@ class TestDatabaseModels:
 
     @pytest.mark.asyncio
     async def test_get_pending_with_skip_locked(self):
-        from src.infrastructure.database import get_session
         from src.db.repositories import EmbeddingRequestRepository
+        from src.infrastructure.database import get_session
 
         async with get_session() as session:
             repo = EmbeddingRequestRepository(session)
@@ -86,8 +86,8 @@ class TestDatabaseModels:
 
     @pytest.mark.asyncio
     async def test_count_by_status(self):
-        from src.infrastructure.database import get_session
         from src.db.repositories import EmbeddingRequestRepository
+        from src.infrastructure.database import get_session
 
         async with get_session() as session:
             repo = EmbeddingRequestRepository(session)

@@ -7,25 +7,22 @@ The operation is fast (~70ms) so there's no benefit to deferring it.
 import asyncio
 import logging
 from datetime import datetime
-from typing import Dict, List, Optional
 from uuid import uuid4
 
 import numpy as np
-from sqlalchemy import update
 
 from ..db.models.constants import EmbeddingRequestStatus
-from ..db.models.embedding_request import EmbeddingRequest
 from ..db.models.evidence_embedding import EvidenceEmbeddingRecord
+from ..db.repositories import EmbeddingRequestRepository
 from ..domain.entities import ImageEmbedding
 from ..infrastructure.config import get_settings
 from ..infrastructure.database import get_session
-from ..db.repositories import EmbeddingRequestRepository
 from .consumer import StreamConsumer
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-_event_loop: Optional[asyncio.AbstractEventLoop] = None
+_event_loop: asyncio.AbstractEventLoop | None = None
 _vector_repo = None  # QdrantVectorRepository, set at startup
 
 
@@ -59,7 +56,7 @@ def create_embedding_results_consumer() -> StreamConsumer:
     return consumer
 
 
-def _handle_embeddings_computed(event_type: str, payload: Dict, message_id: str):
+def _handle_embeddings_computed(event_type: str, payload: dict, message_id: str):
     future = asyncio.run_coroutine_threadsafe(
         _process_embeddings_result(payload, message_id),
         _event_loop,
@@ -67,7 +64,7 @@ def _handle_embeddings_computed(event_type: str, payload: Dict, message_id: str)
     future.result(timeout=300)
 
 
-def _handle_compute_error(event_type: str, payload: Dict, message_id: str):
+def _handle_compute_error(event_type: str, payload: dict, message_id: str):
     future = asyncio.run_coroutine_threadsafe(
         _process_compute_error(payload),
         _event_loop,
@@ -75,7 +72,7 @@ def _handle_compute_error(event_type: str, payload: Dict, message_id: str):
     future.result(timeout=30)
 
 
-async def _process_embeddings_result(payload: Dict, message_id: str):
+async def _process_embeddings_result(payload: dict, message_id: str):
     """Receive pre-computed vectors → store in Qdrant + DB directly (no ARQ queue)."""
     evidence_id = payload.get("evidence_id", "")
     camera_id = payload.get("camera_id", "")
@@ -94,8 +91,8 @@ async def _process_embeddings_result(payload: Dict, message_id: str):
 
     try:
         # 1. Build Qdrant embeddings + DB records
-        qdrant_embeddings: List[ImageEmbedding] = []
-        db_records: List[EvidenceEmbeddingRecord] = []
+        qdrant_embeddings: list[ImageEmbedding] = []
+        db_records: list[EvidenceEmbeddingRecord] = []
 
         for emb in embeddings_data:
             point_id = str(uuid4())
@@ -167,7 +164,7 @@ async def _process_embeddings_result(payload: Dict, message_id: str):
                 request.error_message = str(e)[:500]
 
 
-async def _process_compute_error(payload: Dict):
+async def _process_compute_error(payload: dict):
     """Mark the request as ERROR when the compute service fails."""
     entity_id = payload.get("entity_id", "")
     entity_type = payload.get("entity_type", "")

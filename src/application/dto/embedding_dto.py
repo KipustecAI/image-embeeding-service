@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, Optional, Dict
 from uuid import UUID
 
 
@@ -13,7 +12,7 @@ class EvidenceEmbeddingRequest:
     image_url: str
     camera_id: UUID
     evidence_type: str
-    metadata: Optional[Dict] = None
+    metadata: dict | None = None
 
 
 @dataclass
@@ -21,10 +20,10 @@ class EvidenceEmbeddingResponse:
     """Response from evidence embedding."""
     evidence_id: UUID
     success: bool
-    embedding_id: Optional[str] = None
-    error_message: Optional[str] = None
-    vector_dimension: Optional[int] = None
-    processed_at: Optional[datetime] = None
+    embedding_id: str | None = None
+    error_message: str | None = None
+    vector_dimension: int | None = None
+    processed_at: datetime | None = None
 
 
 @dataclass
@@ -33,9 +32,9 @@ class SearchResultDTO:
     evidence_id: str
     image_url: str
     similarity_score: float
-    camera_id: Optional[str] = None
-    timestamp: Optional[str] = None
-    metadata: Dict = field(default_factory=dict)
+    camera_id: str | None = None
+    timestamp: str | None = None
+    metadata: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -46,7 +45,7 @@ class ImageSearchRequest:
     image_url: str
     threshold: float = 0.75
     max_results: int = 50
-    metadata: Optional[Dict] = None
+    metadata: dict | None = None
 
 
 @dataclass
@@ -54,11 +53,11 @@ class ImageSearchResponse:
     """Response from image search."""
     search_id: UUID
     success: bool
-    results: List[SearchResultDTO] = field(default_factory=list)
+    results: list[SearchResultDTO] = field(default_factory=list)
     total_matches: int = 0
-    search_time_ms: Optional[float] = None
-    error_message: Optional[str] = None
-    processed_at: Optional[datetime] = None
+    search_time_ms: float | None = None
+    error_message: str | None = None
+    processed_at: datetime | None = None
 
 
 @dataclass
@@ -68,5 +67,5 @@ class BatchEmbeddingResult:
     successful: int
     failed: int
     processing_time_ms: float
-    errors: List[Dict] = field(default_factory=list)
-    embedded_ids: List[str] = field(default_factory=list)
+    errors: list[dict] = field(default_factory=list)
+    embedded_ids: list[str] = field(default_factory=list)

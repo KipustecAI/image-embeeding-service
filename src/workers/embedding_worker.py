@@ -5,7 +5,6 @@ No CLIP model. No image downloading. Just storage.
 
 import logging
 from datetime import datetime
-from typing import Dict, List
 from uuid import UUID, uuid4
 
 import numpy as np
@@ -18,6 +17,7 @@ from ..domain.entities import ImageEmbedding
 from ..infrastructure.config import get_settings
 from ..infrastructure.database import get_session
 from ..infrastructure.vector_db.qdrant_repository import QdrantVectorRepository
+
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
@@ -43,11 +43,11 @@ class EmbeddingStorageWorker:
     def __init__(self):
         self.vector_repo = _vector_repo
 
-    async def process_batch(self, request_ids: List[str]) -> Dict:
-        all_embeddings: List[ImageEmbedding] = []
-        all_db_records: List[EvidenceEmbeddingRecord] = []
-        succeeded_ids: List[str] = []
-        failed: List[Dict] = []
+    async def process_batch(self, request_ids: list[str]) -> dict:
+        all_embeddings: list[ImageEmbedding] = []
+        all_db_records: list[EvidenceEmbeddingRecord] = []
+        succeeded_ids: list[str] = []
+        failed: list[dict] = []
 
         for rid in request_ids:
             try:
@@ -147,7 +147,7 @@ class EmbeddingStorageWorker:
         }
 
 
-async def process_evidence_embeddings_batch(ctx: Dict, request_ids: List[str]) -> Dict:
+async def process_evidence_embeddings_batch(ctx: dict, request_ids: list[str]) -> dict:
     """ARQ-registered task for batch embedding storage."""
     worker = EmbeddingStorageWorker()
     return await worker.process_batch(request_ids)

@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timedelta
 
 import numpy as np
-from sqlalchemy import and_, delete, select, func
+from sqlalchemy import and_, delete
 
 from ..db.models.constants import (
     EmbeddingRequestStatus,

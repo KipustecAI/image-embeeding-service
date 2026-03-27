@@ -2,10 +2,9 @@
 
 import logging
 from datetime import datetime, timedelta
-from typing import List, Optional
 from uuid import UUID
 
-from sqlalchemy import and_, select, func
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.constants import EmbeddingRequestStatus
@@ -20,7 +19,7 @@ class EmbeddingRequestRepository:
 
     async def get_pending_requests(
         self, limit: int = 20, max_retries: int = 3
-    ) -> List[EmbeddingRequest]:
+    ) -> list[EmbeddingRequest]:
         """Get TO_WORK requests with FOR UPDATE SKIP LOCKED to prevent double-pickup."""
         query = (
             select(EmbeddingRequest)
@@ -52,7 +51,7 @@ class EmbeddingRequestRepository:
         evidence_id: str,
         camera_id: str,
         image_urls: list,
-        stream_msg_id: Optional[str] = None,
+        stream_msg_id: str | None = None,
     ) -> EmbeddingRequest:
         """Create new embedding request at status=1."""
         request = EmbeddingRequest(
@@ -67,7 +66,7 @@ class EmbeddingRequestRepository:
 
     async def get_stale_working(
         self, stale_minutes: int = 10
-    ) -> List[EmbeddingRequest]:
+    ) -> list[EmbeddingRequest]:
         """Find requests stuck in WORKING for too long."""
         cutoff = datetime.utcnow() - timedelta(minutes=stale_minutes)
         query = select(EmbeddingRequest).where(
@@ -79,7 +78,7 @@ class EmbeddingRequestRepository:
         result = await self.session.execute(query)
         return list(result.scalars().all())
 
-    async def get_by_id(self, request_id: UUID) -> Optional[EmbeddingRequest]:
+    async def get_by_id(self, request_id: UUID) -> EmbeddingRequest | None:
         return await self.session.get(EmbeddingRequest, request_id)
 
     async def count_by_status(self) -> dict:

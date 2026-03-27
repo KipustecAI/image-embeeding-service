@@ -7,21 +7,20 @@ import asyncio
 import logging
 import uuid as uuid_mod
 from datetime import datetime
-from typing import Dict, Optional
 
 import numpy as np
 
 from ..db.models.constants import SearchRequestStatus, SimilarityStatus
 from ..db.models.search_match import SearchMatch
+from ..db.repositories import SearchRequestRepository
 from ..infrastructure.config import get_settings
 from ..infrastructure.database import get_session
-from ..db.repositories import SearchRequestRepository
 from .consumer import StreamConsumer
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-_event_loop: Optional[asyncio.AbstractEventLoop] = None
+_event_loop: asyncio.AbstractEventLoop | None = None
 _vector_repo = None
 
 
@@ -54,7 +53,7 @@ def create_search_results_consumer() -> StreamConsumer:
     return consumer
 
 
-def _handle_search_computed(event_type: str, payload: Dict, message_id: str):
+def _handle_search_computed(event_type: str, payload: dict, message_id: str):
     future = asyncio.run_coroutine_threadsafe(
         _process_search_result(payload, message_id),
         _event_loop,
@@ -62,7 +61,7 @@ def _handle_search_computed(event_type: str, payload: Dict, message_id: str):
     future.result(timeout=120)
 
 
-def _handle_compute_error(event_type: str, payload: Dict, message_id: str):
+def _handle_compute_error(event_type: str, payload: dict, message_id: str):
     future = asyncio.run_coroutine_threadsafe(
         _process_compute_error(payload),
         _event_loop,
@@ -70,7 +69,7 @@ def _handle_compute_error(event_type: str, payload: Dict, message_id: str):
     future.result(timeout=30)
 
 
-async def _process_search_result(payload: Dict, message_id: str):
+async def _process_search_result(payload: dict, message_id: str):
     """Receive query vector → search Qdrant → store match results in DB."""
     search_id = payload.get("search_id", "")
     user_id = payload.get("user_id", "")
@@ -184,7 +183,7 @@ async def _process_search_result(payload: Dict, message_id: str):
                 request.error_message = str(e)[:500]
 
 
-async def _process_compute_error(payload: Dict):
+async def _process_compute_error(payload: dict):
     entity_id = payload.get("entity_id", "")
     entity_type = payload.get("entity_type", "")
     error = payload.get("error", "Unknown compute error")

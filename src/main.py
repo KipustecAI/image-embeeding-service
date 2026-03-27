@@ -13,27 +13,25 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from contextlib import asynccontextmanager
-from typing import List, Optional
 
 import uvicorn
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from fastapi import Depends, FastAPI, HTTPException, Query, status
-from fastapi.responses import JSONResponse
+from fastapi import Depends, FastAPI, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import text
 
 from src.api.dependencies import UserContext, get_user_context
 from src.db.repositories import EmbeddingRequestRepository, SearchRequestRepository
-from pydantic import BaseModel
-
 from src.infrastructure.config import get_settings
 from src.infrastructure.database import engine, get_session
 from src.infrastructure.vector_db.qdrant_repository import QdrantVectorRepository
-from src.streams.producer import StreamProducer
 from src.services.safety_nets import (
     cleanup_old_requests,
-    recover_stale_working,
     recalculate_searches,
+    recover_stale_working,
+)
+from src.services.safety_nets import (
     set_vector_repo as set_safety_nets_vector_repo,
 )
 from src.streams.embedding_results_consumer import (
@@ -41,6 +39,7 @@ from src.streams.embedding_results_consumer import (
     set_results_event_loop,
     set_vector_repo,
 )
+from src.streams.producer import StreamProducer
 from src.streams.search_results_consumer import (
     create_search_results_consumer,
     set_search_results_event_loop,
@@ -256,7 +255,7 @@ class SearchCreateRequest(BaseModel):
     image_url: str
     threshold: float = 0.75
     max_results: int = 50
-    metadata: Optional[dict] = None
+    metadata: dict | None = None
 
 
 @app.post("/api/v1/search", status_code=202)
@@ -398,10 +397,11 @@ async def trigger_recalculation(
     ctx: UserContext = Depends(get_user_context),
 ):
     """Manually trigger recalculation of completed searches using stored query vectors."""
+    import numpy as np
     from sqlalchemy import delete as sa_delete
+
     from src.db.models.constants import SimilarityStatus
     from src.db.models.search_match import SearchMatch
-    import numpy as np
 
     async with get_session() as session:
         repo = SearchRequestRepository(session)

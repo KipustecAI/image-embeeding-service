@@ -1,12 +1,12 @@
 """CLIP embedding service implementation."""
 
 import logging
-from typing import List, Optional
 from io import BytesIO
-import numpy as np
+
 import httpx
-from PIL import Image
+import numpy as np
 import torch
+from PIL import Image
 from sentence_transformers import SentenceTransformer
 
 from ...domain.repositories import EmbeddingService
@@ -17,72 +17,72 @@ logger = logging.getLogger(__name__)
 
 class CLIPEmbedder(EmbeddingService):
     """CLIP embedding service using sentence-transformers."""
-    
+
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.model: Optional[SentenceTransformer] = None
-        self.device: Optional[torch.device] = None
+        self.model: SentenceTransformer | None = None
+        self.device: torch.device | None = None
         self.http_client = httpx.AsyncClient(timeout=settings.image_download_timeout)
-        
+
     async def initialize(self) -> None:
         """Initialize the CLIP model."""
         try:
             logger.info(f"Initializing CLIP model: {self.settings.clip_model_name}")
-            
+
             # Set device
             if self.settings.clip_device == "cuda" and torch.cuda.is_available():
                 self.device = torch.device("cuda")
             else:
                 self.device = torch.device("cpu")
-            
+
             # Load model
             self.model = SentenceTransformer(f"clip-{self.settings.clip_model_name}")
             self.model.to(self.device)
-            
+
             logger.info(f"CLIP model loaded successfully on {self.device}")
-            
+
         except Exception as e:
             logger.error(f"Failed to initialize CLIP model: {e}")
             raise
-    
-    async def generate_embedding(self, image_url: str) -> Optional[np.ndarray]:
+
+    async def generate_embedding(self, image_url: str) -> np.ndarray | None:
         """Generate embedding vector for an image."""
         try:
             # Download image
             image = await self._download_image(image_url)
             if image is None:
                 return None
-            
+
             # Generate embedding
             with torch.no_grad():
                 embedding = self.model.encode(image, convert_to_tensor=True)
                 embedding_np = embedding.cpu().numpy()
-            
+
             # Normalize embedding
             embedding_np = embedding_np / np.linalg.norm(embedding_np)
-            
+
             return embedding_np
-            
+
         except Exception as e:
             logger.error(f"Failed to generate embedding for {image_url}: {e}")
             return None
-    
-    async def generate_embeddings_batch(self, image_urls: List[str]) -> List[Optional[np.ndarray]]:
+
+    async def generate_embeddings_batch(self, image_urls: list[str]) -> list[np.ndarray | None]:
         """Generate embeddings for multiple images in batch."""
         try:
             # Download all images
             images = []
             valid_indices = []
-            
+
             for idx, url in enumerate(image_urls):
                 image = await self._download_image(url)
                 if image is not None:
                     images.append(image)
                     valid_indices.append(idx)
-            
+
             if not images:
                 return [None] * len(image_urls)
-            
+
             # Generate embeddings in batch
             with torch.no_grad():
                 embeddings = self.model.encode(
@@ -92,27 +92,27 @@ class CLIPEmbedder(EmbeddingService):
                     show_progress_bar=len(images) > 10
                 )
                 embeddings_np = embeddings.cpu().numpy()
-            
+
             # Normalize embeddings
             norms = np.linalg.norm(embeddings_np, axis=1, keepdims=True)
             embeddings_np = embeddings_np / norms
-            
+
             # Build result list with None for failed images
             results = [None] * len(image_urls)
             for idx, valid_idx in enumerate(valid_indices):
                 results[valid_idx] = embeddings_np[idx]
-            
+
             return results
-            
+
         except Exception as e:
             logger.error(f"Failed to generate batch embeddings: {e}")
             return [None] * len(image_urls)
-    
+
     def get_embedding_dimension(self) -> int:
         """Get the dimension of embedding vectors."""
         # CLIP ViT-B-32 produces 512-dimensional vectors
         return self.settings.qdrant_vector_size
-    
+
     async def validate_image(self, image_url: str) -> bool:
         """Validate if image URL is accessible and processable."""
         try:
@@ -120,26 +120,26 @@ class CLIPEmbedder(EmbeddingService):
             if not image_url.startswith(('http://', 'https://')):
                 logger.warning(f"Invalid URL format: {image_url}")
                 return False
-            
+
             # Check file extension
             supported_formats = self.settings.supported_formats
             if isinstance(supported_formats, str):
                 supported_formats = supported_formats.split(',')
-            
+
             extension = image_url.split('.')[-1].lower().split('?')[0]
             if extension not in supported_formats:
                 logger.warning(f"Unsupported format {extension} for {image_url}")
                 return False
-            
+
             # Try to download and open image
             image = await self._download_image(image_url)
             return image is not None
-            
+
         except Exception as e:
             logger.error(f"Failed to validate image {image_url}: {e}")
             return False
-    
-    async def _download_image(self, image_url: str) -> Optional[Image.Image]:
+
+    async def _download_image(self, image_url: str) -> Image.Image | None:
         """Download image from URL or load from local file."""
         try:
             # Local file support (file:// prefix)
@@ -180,7 +180,7 @@ class CLIPEmbedder(EmbeddingService):
         except Exception as e:
             logger.error(f"Failed to download image {image_url}: {e}")
             return None
-    
+
     async def cleanup(self) -> None:
         """Clean up resources."""
         await self.http_client.aclose()

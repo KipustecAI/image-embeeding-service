@@ -9,7 +9,7 @@ import logging
 import socket
 import threading
 import time
-from typing import Callable, Dict, Optional
+from collections.abc import Callable
 
 import redis
 
@@ -21,11 +21,11 @@ class StreamConsumer:
         self,
         stream: str,
         group: str,
-        consumer_name: Optional[str] = None,
-        redis_url: Optional[str] = None,
+        consumer_name: str | None = None,
+        redis_url: str | None = None,
         redis_host: str = "localhost",
         redis_port: int = 6379,
-        redis_password: Optional[str] = None,
+        redis_password: str | None = None,
         redis_db: int = 3,
         block_ms: int = 5000,
         batch_size: int = 10,
@@ -42,9 +42,9 @@ class StreamConsumer:
         self.dead_letter_max_retries = dead_letter_max_retries
         self._concurrency = concurrency
 
-        self._handlers: Dict[str, Callable] = {}
+        self._handlers: dict[str, Callable] = {}
         self._running = False
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._last_reclaim_time = 0.0
         self._reclaim_interval = 300  # 5 minutes
 
@@ -115,7 +115,7 @@ class StreamConsumer:
                 )
 
                 if messages:
-                    for stream_name, stream_messages in messages:
+                    for _stream_name, stream_messages in messages:
                         for message_id, fields in stream_messages:
                             self._process_message(message_id, fields)
 

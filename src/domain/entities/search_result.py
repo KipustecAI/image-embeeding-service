@@ -1,23 +1,23 @@
 """Search result entity."""
 
-from typing import Optional, Dict, Any
-from datetime import datetime
 from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 
 @dataclass
 class SearchResult:
     """Represents a search result from vector database."""
-    
+
     evidence_id: UUID
     camera_id: UUID
     similarity_score: float
     image_url: str
     created_at: datetime
-    metadata: Optional[Dict[str, Any]] = None
-    
-    def to_dict(self) -> Dict[str, Any]:
+    metadata: dict[str, Any] | None = None
+
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary representation."""
         return {
             "evidence_id": str(self.evidence_id),

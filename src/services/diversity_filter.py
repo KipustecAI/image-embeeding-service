@@ -5,7 +5,6 @@ Ported from deepface-restapi src/services/diversity_filter.py.
 """
 
 import logging
-from typing import List, Optional
 
 import cv2
 import httpx
@@ -33,14 +32,14 @@ class DiversityFilter:
         self.max_images = max_images
         self.min_images = min_images
 
-    async def filter_image_urls(self, image_urls: List[str]) -> List[str]:
+    async def filter_image_urls(self, image_urls: list[str]) -> list[str]:
         """Download images and return only visually distinct ones."""
         if not image_urls:
             return []
 
-        selected_urls: List[str] = []
-        selected_histograms: List[np.ndarray] = []
-        rejected_urls: List[str] = []
+        selected_urls: list[str] = []
+        selected_histograms: list[np.ndarray] = []
+        rejected_urls: list[str] = []
 
         for url in image_urls:
             if len(selected_urls) >= self.max_images:
@@ -98,7 +97,7 @@ class DiversityFilter:
         cv2.normalize(hist, hist)
         return hist
 
-    def _is_unique(self, histogram: np.ndarray, selected: List[np.ndarray]) -> bool:
+    def _is_unique(self, histogram: np.ndarray, selected: list[np.ndarray]) -> bool:
         if self.compare_all:
             for ref_hist in selected:
                 distance = cv2.compareHist(histogram, ref_hist, cv2.HISTCMP_BHATTACHARYYA)
@@ -110,7 +109,7 @@ class DiversityFilter:
             distance = cv2.compareHist(histogram, last, cv2.HISTCMP_BHATTACHARYYA)
             return distance >= self.threshold
 
-    async def _download_image(self, url: str) -> Optional[np.ndarray]:
+    async def _download_image(self, url: str) -> np.ndarray | None:
         try:
             if url.startswith("file://"):
                 path = url[7:]  # Strip file:// prefix
@@ -129,7 +128,7 @@ class DiversityFilter:
 
 # ── Singleton ──
 
-_filter_instance: Optional[DiversityFilter] = None
+_filter_instance: DiversityFilter | None = None
 
 
 def get_diversity_filter() -> DiversityFilter:
