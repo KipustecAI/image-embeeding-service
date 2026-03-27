@@ -112,6 +112,10 @@ class DiversityFilter:
 
     async def _download_image(self, url: str) -> Optional[np.ndarray]:
         try:
+            if url.startswith("file://"):
+                path = url[7:]  # Strip file:// prefix
+                image = cv2.imread(path, cv2.IMREAD_COLOR)
+                return image
             async with httpx.AsyncClient(timeout=30) as client:
                 response = await client.get(url)
                 response.raise_for_status()

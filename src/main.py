@@ -242,6 +242,37 @@ async def get_statistics():
     }
 
 
+# ── Pipeline Status (used by E2E test scripts) ──
+
+
+@app.get("/api/v1/pipeline/status")
+async def pipeline_status():
+    """Combined pipeline status: DB counts + trigger metrics + consumer health."""
+    async with get_session() as session:
+        embed_repo = EmbeddingRequestRepository(session)
+        search_repo = SearchRequestRepository(session)
+        embed_counts = await embed_repo.count_by_status()
+        search_counts = await search_repo.count_by_status()
+
+    embed_trigger = get_batch_trigger("embedding")
+    search_trigger = get_batch_trigger("search")
+
+    return {
+        "status_counts": {
+            "embedding": embed_counts,
+            "search": search_counts,
+        },
+        "triggers": {
+            "embedding": embed_trigger.health() if embed_trigger else None,
+            "search": search_trigger.health() if search_trigger else None,
+        },
+        "consumers": {
+            "embed": embed_consumer.health() if embed_consumer else None,
+            "search": search_consumer.health() if search_consumer else None,
+        },
+    }
+
+
 # ── Internal Trigger (cross-process notification) ──
 
 

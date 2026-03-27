@@ -140,32 +140,40 @@ class CLIPEmbedder(EmbeddingService):
             return False
     
     async def _download_image(self, image_url: str) -> Optional[Image.Image]:
-        """Download image from URL."""
+        """Download image from URL or load from local file."""
         try:
+            # Local file support (file:// prefix)
+            if image_url.startswith("file://"):
+                path = image_url[7:]
+                image = Image.open(path)
+                if image.mode != 'RGB':
+                    image = image.convert('RGB')
+                return image
+
             response = await self.http_client.get(image_url)
             response.raise_for_status()
-            
+
             # Check content type
             content_type = response.headers.get('content-type', '').lower()
             if not content_type.startswith('image/'):
                 logger.warning(f"Invalid content type {content_type} for {image_url}")
                 return None
-            
+
             # Check size
             content_length = int(response.headers.get('content-length', 0))
             if content_length > self.settings.max_image_size:
                 logger.warning(f"Image too large ({content_length} bytes) for {image_url}")
                 return None
-            
+
             # Open image
             image = Image.open(BytesIO(response.content))
-            
+
             # Convert to RGB if necessary
             if image.mode != 'RGB':
                 image = image.convert('RGB')
-            
+
             return image
-            
+
         except httpx.HTTPError as e:
             logger.error(f"HTTP error downloading {image_url}: {e}")
             return None
