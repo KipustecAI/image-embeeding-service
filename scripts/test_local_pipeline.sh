@@ -44,16 +44,9 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-# Redis helper — uses docker exec if redis-cli not installed locally
+# Redis helper — uses docker exec (always works with our docker-compose setup)
 rcli() {
-  local auth_args=()
-  if [[ -n "$REDIS_PASS" ]]; then auth_args=(-a "$REDIS_PASS"); fi
-
-  if command -v redis-cli > /dev/null 2>&1; then
-    redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" "${auth_args[@]}" -n "$REDIS_STREAMS_DB" "$@" 2>/dev/null
-  else
-    docker exec embedding-redis redis-cli "${auth_args[@]}" -n "$REDIS_STREAMS_DB" "$@" 2>/dev/null
-  fi
+  /usr/local/bin/docker exec embedding-redis redis-cli -n "$REDIS_STREAMS_DB" "$@" 2>/dev/null
 }
 
 log()  { printf "${CYAN}[%s]${NC} %s\n" "$(date '+%H:%M:%S')" "$1"; }
@@ -108,14 +101,25 @@ test_full_pipeline() {
   log "Camera ID:   ${camera_id}"
   log "ZIP URL:     ${zip_url}"
 
-  # Build image URLs from local data/inputs
-  local image_urls_json="["
-  local first=true
-  for f in $(ls "$INPUT_DIR"/*.{jpg,JPG,jpeg,png} 2>/dev/null | head -5); do
-    if [[ "$first" == "true" ]]; then first=false; else image_urls_json+=","; fi
-    image_urls_json+="\"file://${f}\""
-  done
-  image_urls_json+="]"
+  # Build image URLs from local data/inputs (pick larger images that pass diversity filter)
+  local image_urls_json
+  image_urls_json=$(python3 -c "
+import os, json
+d = '${INPUT_DIR}'
+imgs = []
+for f in sorted(os.listdir(d)):
+    p = os.path.join(d, f)
+    if f.lower().endswith(('.jpg','.jpeg','.png')) and os.path.getsize(p) > 10000:
+        imgs.append('file://' + p)
+    if len(imgs) >= 5:
+        break
+# Fallback to any images if no large ones found
+if not imgs:
+    for f in sorted(os.listdir(d))[:5]:
+        if f.lower().endswith(('.jpg','.jpeg','.png')):
+            imgs.append('file://' + os.path.join(d, f))
+print(json.dumps(imgs))
+")
 
   local img_count=$(echo "$image_urls_json" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))")
   log "Using ${img_count} local images from data/inputs/"
