@@ -92,14 +92,13 @@ preflight() {
 test_full_pipeline() {
   preflight
 
-  # Parse payload
-  local evidence_id=$(python3 -c "import json; d=json.load(open('${PAYLOAD_FILE}')); print(d['id'])")
+  # Parse payload (use unique evidence_id per run to avoid dedup)
+  local original_id=$(python3 -c "import json; d=json.load(open('${PAYLOAD_FILE}')); print(d['id'])")
   local camera_id=$(python3 -c "import json; d=json.load(open('${PAYLOAD_FILE}')); print(d['camera_id'])")
-  local zip_url=$(python3 -c "import json; d=json.load(open('${PAYLOAD_FILE}')); print(d['zip_url'])")
+  local evidence_id="test-$(date +%s)-${RANDOM}"
 
-  log "Evidence ID: ${evidence_id}"
+  log "Evidence ID: ${evidence_id} (based on ${original_id})"
   log "Camera ID:   ${camera_id}"
-  log "ZIP URL:     ${zip_url}"
 
   # Build image URLs from local data/inputs
   local image_urls_json="["
