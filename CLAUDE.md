@@ -67,22 +67,26 @@ All endpoints except health checks require `X-API-Key` header matching `EMBEDDIN
 
 ## Conda Environment
 
-**Environment name:** `clip_p11` (Python 3.11)
+**Environment name:** `image_compute_backend_p11` (Python 3.11)
 
 Run commands inside the conda environment like this:
 
 ```bash
-source ~/anaconda3/etc/profile.d/conda.sh && conda activate clip_p11 && <command>
+source ~/anaconda3/etc/profile.d/conda.sh && conda activate image_compute_backend_p11 && <command>
 ```
 
 Examples:
 ```bash
 # Run tests
-source ~/anaconda3/etc/profile.d/conda.sh && conda activate clip_p11 && pytest tests/ -v
+source ~/anaconda3/etc/profile.d/conda.sh && conda activate image_compute_backend_p11 && pytest tests/ -v
 
 # Run CI locally
-source ~/anaconda3/etc/profile.d/conda.sh && conda activate clip_p11 && make ci-local
+source ~/anaconda3/etc/profile.d/conda.sh && conda activate image_compute_backend_p11 && make ci-local
 
 # Lint and format
-source ~/anaconda3/etc/profile.d/conda.sh && conda activate clip_p11 && ruff check --fix src/ tests/
+source ~/anaconda3/etc/profile.d/conda.sh && conda activate image_compute_backend_p11 && ruff check --fix src/ tests/
 ```
+
+in mac use this as reference of the test for cli of redis
+ which redis-cli
+/opt/homebrew/bin/redis-cli
