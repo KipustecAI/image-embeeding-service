@@ -301,7 +301,7 @@ test_search() {
   done
 
   # 3. Get final status
-  local final=$(curl -sf "${BACKEND_URL}/api/v1/search/${search_id}" -H "X-API-Key: ${API_KEY}")
+  local final=$(curl -sf "${BACKEND_URL}/api/v1/search/${search_id}" "${GW_HEADERS[@]}")
   local total_matches=$(echo "$final" | python3 -c "import sys,json; print(json.load(sys.stdin)['total_matches'])")
   local final_status=$(echo "$final" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])")
 
