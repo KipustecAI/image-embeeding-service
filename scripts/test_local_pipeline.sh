@@ -36,6 +36,9 @@ BACKEND_URL="${BACKEND_URL:-http://localhost:8001}"
 PAYLOAD_FILE="${PROJECT_DIR}/data/payload_example.json"
 INPUT_DIR="${PROJECT_DIR}/data/inputs"
 
+# Simulate gateway headers for local testing
+GW_HEADERS=(-H "X-User-Id: test-user-local" -H "X-User-Role: dev" -H "X-Request-Id: test-$(date +%s)")
+
 # Colors
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -267,15 +270,15 @@ test_search() {
   fi
   ok "Using search image: $(basename "$search_image")"
 
-  local user_id="test-user-$(date +%s)"
+  local user_id="test-user-local"  # matches X-User-Id in GW_HEADERS
   START_TIME=$(date +%s)
 
-  # 1. POST /api/v1/search
+  # 1. POST /api/v1/search (user_id comes from X-User-Id gateway header)
   log "Submitting search via API..."
   local response=$(curl -sf -X POST "${BACKEND_URL}/api/v1/search" \
-    -H "X-API-Key: ${API_KEY}" \
+    "${GW_HEADERS[@]}" \
     -H "Content-Type: application/json" \
-    -d "{\"image_url\":\"file://${search_image}\",\"user_id\":\"${user_id}\",\"threshold\":0.3,\"max_results\":20}")
+    -d "{\"image_url\":\"file://${search_image}\",\"threshold\":0.3,\"max_results\":20}")
 
   if [[ -z "$response" ]]; then
     fail "POST /api/v1/search failed"; exit 1
@@ -292,7 +295,7 @@ test_search() {
     sleep 2
     elapsed=$((elapsed + 2))
     search_status=$(curl -sf "${BACKEND_URL}/api/v1/search/${search_id}" \
-      -H "X-API-Key: ${API_KEY}" | \
+      "${GW_HEADERS[@]}" | \
       python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "pending")
     echo "  [${elapsed}s] status=${search_status}"
   done
@@ -310,7 +313,7 @@ test_search() {
   if [[ "$final_status" == "completed" && "$total_matches" -gt 0 ]]; then
     log "Fetching matches..."
     local matches=$(curl -sf "${BACKEND_URL}/api/v1/search/${search_id}/matches?limit=5" \
-      -H "X-API-Key: ${API_KEY}")
+      "${GW_HEADERS[@]}")
     echo "$matches" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
@@ -323,7 +326,7 @@ for m in data['matches']:
   # 5. List user searches
   log "Listing user searches..."
   local user_searches=$(curl -sf "${BACKEND_URL}/api/v1/search/user/${user_id}" \
-    -H "X-API-Key: ${API_KEY}")
+    "${GW_HEADERS[@]}")
   local user_total=$(echo "$user_searches" | python3 -c "import sys,json; print(json.load(sys.stdin)['total'])" 2>/dev/null)
   echo "  User ${user_id} has ${user_total} search(es)"
 

@@ -17,9 +17,6 @@ class Settings(BaseSettings):
     debug: bool = Field(False, validation_alias="DEBUG")
     log_level: str = Field("INFO", validation_alias="LOG_LEVEL")
     
-    # Service Security
-    service_api_key: str = Field(..., validation_alias="EMBEDDING_SERVICE_API_KEY")
-
     # Database
     database_url: str = Field(
         "postgresql+asyncpg://embed_user:embed_pass@localhost:5433/embedding_service",

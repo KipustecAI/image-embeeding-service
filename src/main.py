@@ -21,7 +21,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
-from src.api.dependencies import verify_api_key
+from src.api.dependencies import UserContext, get_user_context
 from src.db.repositories import EmbeddingRequestRepository, SearchRequestRepository
 from pydantic import BaseModel
 
@@ -252,7 +252,6 @@ SIMILARITY_NAMES = {1: "no_matches", 2: "matches_found"}
 
 class SearchCreateRequest(BaseModel):
     image_url: str
-    user_id: str
     threshold: float = 0.75
     max_results: int = 50
     metadata: Optional[dict] = None
@@ -261,17 +260,18 @@ class SearchCreateRequest(BaseModel):
 @app.post("/api/v1/search", status_code=202)
 async def create_search(
     body: SearchCreateRequest,
-    _api_key: str = Depends(verify_api_key),
+    ctx: UserContext = Depends(get_user_context),
 ):
     """Submit a search — publishes to GPU compute stream, returns search_id."""
     search_id = str(__import__("uuid").uuid4())
+    user_id = ctx.user_id
 
     # Create DB row (status=TO_WORK)
     async with get_session() as session:
         repo = SearchRequestRepository(session)
         await repo.create_request(
             search_id=search_id,
-            user_id=body.user_id,
+            user_id=user_id,
             image_url=body.image_url,
             threshold=body.threshold,
             max_results=body.max_results,
@@ -284,7 +284,7 @@ async def create_search(
         event_type="search.created",
         payload={
             "search_id": search_id,
-            "user_id": body.user_id,
+            "user_id": user_id,
             "image_url": body.image_url,
             "threshold": body.threshold,
             "max_results": body.max_results,
@@ -302,7 +302,7 @@ async def create_search(
 @app.get("/api/v1/search/{search_id}")
 async def get_search(
     search_id: str,
-    _api_key: str = Depends(verify_api_key),
+    ctx: UserContext = Depends(get_user_context),
 ):
     """Get search status (no matches inline — use /matches endpoint for results)."""
     async with get_session() as session:
@@ -332,7 +332,7 @@ async def get_search_matches(
     search_id: str,
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
-    _api_key: str = Depends(verify_api_key),
+    ctx: UserContext = Depends(get_user_context),
 ):
     """Get paginated match results for a search, sorted by similarity score."""
     async with get_session() as session:
@@ -359,7 +359,7 @@ async def list_user_searches(
     user_id: str,
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
-    _api_key: str = Depends(verify_api_key),
+    ctx: UserContext = Depends(get_user_context),
 ):
     """List all searches by a user, paginated, most recent first."""
     async with get_session() as session:
@@ -393,7 +393,7 @@ async def list_user_searches(
 async def trigger_recalculation(
     limit: int = Query(20, ge=1, le=100),
     hours_old: int = Query(2, ge=1, le=168),
-    _api_key: str = Depends(verify_api_key),
+    ctx: UserContext = Depends(get_user_context),
 ):
     """Manually trigger recalculation of completed searches."""
     async with get_session() as session:

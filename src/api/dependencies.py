@@ -1,38 +1,40 @@
-"""API dependencies for authentication and authorization."""
+"""API dependencies — user context from API Gateway headers."""
 
-from typing import Annotated
-from fastapi import Header, HTTPException, status
-from src.infrastructure.config import get_settings
+from dataclasses import dataclass
+from typing import Optional
 
-settings = get_settings()
+from fastapi import Request
 
 
-async def verify_api_key(
-    x_api_key: Annotated[str, Header()] = None
-) -> str:
-    """Verify the API key from request headers.
-    
-    Args:
-        x_api_key: API key from X-API-Key header
-        
-    Returns:
-        The verified API key
-        
-    Raises:
-        HTTPException: If API key is missing or invalid
-    """
-    if not x_api_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="API key required",
-            headers={"WWW-Authenticate": "ApiKey"},
-        )
-    
-    if x_api_key != settings.service_api_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid API key",
-            headers={"WWW-Authenticate": "ApiKey"},
-        )
-    
-    return x_api_key
+@dataclass
+class UserContext:
+    user_id: str
+    role: str
+    scopes: list[str]
+    created_by: Optional[str]
+    app_type: Optional[int]
+    request_id: str
+
+    @property
+    def is_guest(self) -> bool:
+        return self.role == "guest"
+
+    @property
+    def owner_id(self) -> str:
+        """The effective owner: parent user for guests, self otherwise."""
+        return self.created_by if self.is_guest else self.user_id
+
+
+def get_user_context(request: Request) -> UserContext:
+    """Extract user context from gateway-injected headers."""
+    raw_scopes = request.headers.get("X-User-Scopes", "")
+    raw_app_type = request.headers.get("X-App-Type")
+
+    return UserContext(
+        user_id=request.headers.get("X-User-Id", ""),
+        role=request.headers.get("X-User-Role", ""),
+        scopes=[s for s in raw_scopes.split(",") if s],
+        created_by=request.headers.get("X-User-Created-By"),
+        app_type=int(raw_app_type) if raw_app_type else None,
+        request_id=request.headers.get("X-Request-Id", ""),
+    )
