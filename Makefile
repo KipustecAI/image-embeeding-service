@@ -1,4 +1,6 @@
-.PHONY: help install run run-api run-worker run-all docker-up docker-down test clean migrate
+.PHONY: help install run run-api run-worker run-all docker-up docker-down test clean migrate \
+       lint lint-fix format format-check test-cov pre-commit-install pre-commit-run \
+       build-image ci-local ci-lint ci-test ci-migrate ci-build ci-clean
 
 help:
 	@echo "=== Image Embedding Backend ==="
@@ -9,13 +11,29 @@ help:
 	@echo "  3. make run-api         - Start API server (terminal 1)"
 	@echo "  4. make run-worker      - Start ARQ storage worker (terminal 2)"
 	@echo ""
-	@echo "Commands:"
+	@echo "Development:"
 	@echo "  make install            - Install dependencies"
 	@echo "  make run-all            - Run API + worker in tmux"
 	@echo "  make test               - Run integration tests"
-	@echo "  make test-pipeline      - Run full pipeline test with example payload"
+	@echo "  make test-cov           - Run tests with coverage report"
+	@echo "  make lint               - Ruff check"
+	@echo "  make lint-fix           - Ruff check with auto-fix"
+	@echo "  make format             - Ruff format"
+	@echo "  make format-check       - Check formatting (no changes)"
+	@echo "  make pre-commit-install - Install pre-commit hooks"
+	@echo ""
+	@echo "CI (Docker-based, mirrors GitHub Actions):"
+	@echo "  make ci-local           - Full CI pipeline (lint + test + migrate + build)"
+	@echo "  make ci-lint            - Ruff checks in Docker"
+	@echo "  make ci-test            - Pytest with services in Docker"
+	@echo "  make ci-migrate         - Alembic migration validation in Docker"
+	@echo "  make ci-build           - Verify production image builds"
+	@echo "  make ci-clean           - Remove CI containers and volumes"
+	@echo ""
+	@echo "Other:"
 	@echo "  make docker-down        - Stop Docker services"
 	@echo "  make migrate-create     - Create new migration (msg=description)"
+	@echo "  make build-image        - Build production Docker image"
 	@echo "  make clean              - Clean cache and temp files"
 
 install:
@@ -88,8 +106,56 @@ test-pipeline:
 lint:
 	ruff check src/ tests/
 
-format:
+lint-fix:
 	ruff check --fix src/ tests/
+
+format:
+	ruff format src/ tests/
+
+format-check:
+	ruff format --check src/ tests/
+
+pre-commit-install:
+	pre-commit install
+
+pre-commit-run:
+	pre-commit run --all-files
+
+# --- Coverage ---
+
+test-cov:
+	pytest tests/ -v --tb=short --cov=src --cov-report=term-missing --cov-report=html
+
+# --- Docker build ---
+
+build-image:
+	docker build -t lucam/image-embeeding-api:latest .
+
+# --- CI (Docker-based, mirrors GitHub Actions) ---
+
+ci-local: ci-lint ci-test ci-migrate ci-build
+	@echo ""
+	@echo "✓ Full CI pipeline passed"
+
+ci-lint:
+	@echo "=== CI: Lint ==="
+	docker compose -f docker-compose.ci.yml run --rm ci-lint
+
+ci-test:
+	@echo "=== CI: Test ==="
+	docker compose -f docker-compose.ci.yml run --rm ci-test
+
+ci-migrate:
+	@echo "=== CI: Migrations ==="
+	docker compose -f docker-compose.ci.yml run --rm ci-migrate
+
+ci-build:
+	@echo "=== CI: Docker Build ==="
+	docker build -t lucam/image-embeeding-api:ci-local .
+	@echo "✓ Production image builds successfully"
+
+ci-clean:
+	docker compose -f docker-compose.ci.yml down -v --remove-orphans
 
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true

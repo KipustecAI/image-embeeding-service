@@ -1,0 +1,37 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT }}
+          script: |
+            cd /root/projects/lucam/image-embeeding-service
+
+            echo "=== Pulling latest changes ==="
+            git pull origin main
+
+            echo "=== Building Docker image ==="
+            make build-image
+
+            echo "=== Running migrations ==="
+            docker compose run --rm ms-embedding-api alembic upgrade head
+
+            echo "=== Restarting service ==="
+            cd /root/projects/lucam/orchestrated
+            docker compose up -d ms-embedding-api
+
+            echo "=== Service status ==="
+            docker compose ps ms-embedding-api
