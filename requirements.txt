@@ -18,13 +18,25 @@ qdrant-client==1.12.1
 # HTTP client
 httpx==0.28.1
 
-# Redis for caching and scheduling
+# Database
+SQLAlchemy>=2.0.0
+asyncpg
+alembic
+psycopg2-binary
+greenlet
+
+# Redis + task queue
 redis==5.2.1
 arq==0.26.1
 
+# Scheduler (safety nets)
+apscheduler>=3.10.0
+
+# Image diversity filter
+opencv-python-headless>=4.8.0
+
 # Async utilities
 aiofiles==24.1.0
-asyncio==3.4.3
 
 # Logging and monitoring
 structlog==24.4.0

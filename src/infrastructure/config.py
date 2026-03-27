@@ -19,11 +19,13 @@ class Settings(BaseSettings):
     
     # Service Security
     service_api_key: str = Field(..., validation_alias="EMBEDDING_SERVICE_API_KEY")
-    
-    # Main Video Server API
-    video_server_base_url: str = Field("http://localhost:8000", validation_alias="VIDEO_SERVER_BASE_URL")
-    video_server_api_key: str = Field(..., validation_alias="VIDEO_SERVER_API_KEY")  # Must be DEV or ROOT role
-    
+
+    # Database
+    database_url: str = Field(
+        "postgresql+asyncpg://embed_user:embed_pass@localhost:5433/embedding_service",
+        validation_alias="DATABASE_URL",
+    )
+
     # Qdrant Vector Database
     qdrant_host: str = Field("localhost", validation_alias="QDRANT_HOST")
     qdrant_port: int = Field(6333, validation_alias="QDRANT_PORT")
@@ -31,24 +33,48 @@ class Settings(BaseSettings):
     qdrant_collection_name: str = Field("evidence_embeddings", validation_alias="QDRANT_COLLECTION_NAME")
     qdrant_vector_size: int = Field(512, validation_alias="QDRANT_VECTOR_SIZE")  # CLIP ViT-B-32 dimension
     
-    # Redis Configuration (for scheduler)
+    # Redis Configuration
     redis_host: str = Field("localhost", validation_alias="REDIS_HOST")
     redis_port: int = Field(6379, validation_alias="REDIS_PORT")
     redis_password: Optional[str] = Field(None, validation_alias="REDIS_PASSWORD")
-    redis_database: int = Field(5, validation_alias="REDIS_DATABASE")  # Use DB 5 for embedding service
-    
-    # Scheduler Configuration (This is for the scheduler service to check for new evidence and image searches)
-    scheduler_enabled: bool = Field(True, validation_alias="SCHEDULER_ENABLED")
-    evidence_check_interval: int = Field(600, validation_alias="EVIDENCE_CHECK_INTERVAL")  # 10 minutes
-    evidence_batch_size: int = Field(50, validation_alias="EVIDENCE_BATCH_SIZE")
-    image_search_check_interval: int = Field(30, validation_alias="IMAGE_SEARCH_CHECK_INTERVAL")  # 30 seconds
-    image_search_batch_size: int = Field(10, validation_alias="IMAGE_SEARCH_BATCH_SIZE")
-    
-    # Recalculation Configuration (This is for the scheduler service to recalculate image searches)
-    recalculation_enabled: bool = Field(True, validation_alias="RECALCULATION_ENABLED")  # Disabled by default
-    recalculation_interval: int = Field(3600, validation_alias="RECALCULATION_INTERVAL")  # 1 hour
-    recalculation_hours_old: int = Field(2, validation_alias="RECALCULATION_HOURS_OLD")  # Only recalc if older than 2 hours
+    redis_database: int = Field(5, validation_alias="REDIS_DATABASE")
+
+    # Redis Streams
+    redis_streams_db: int = Field(3, validation_alias="REDIS_STREAMS_DB")
+    stream_evidence_embed: str = Field("evidence:embed", validation_alias="STREAM_EVIDENCE_EMBED")
+    stream_evidence_search: str = Field("evidence:search", validation_alias="STREAM_EVIDENCE_SEARCH")
+    stream_consumer_group: str = Field("embed-workers", validation_alias="STREAM_CONSUMER_GROUP")
+    stream_search_group: str = Field("search-workers", validation_alias="STREAM_SEARCH_GROUP")
+    stream_consumer_block_ms: int = Field(5000, validation_alias="STREAM_CONSUMER_BLOCK_MS")
+    stream_consumer_batch_size: int = Field(10, validation_alias="STREAM_CONSUMER_BATCH_SIZE")
+    stream_reclaim_idle_ms: int = Field(3_600_000, validation_alias="STREAM_RECLAIM_IDLE_MS")
+    stream_dead_letter_max_retries: int = Field(3, validation_alias="STREAM_DEAD_LETTER_MAX_RETRIES")
+    stream_consumer_concurrency: int = Field(1, validation_alias="STREAM_CONSUMER_CONCURRENCY")
+
+    # Batch Trigger
+    batch_trigger_size: int = Field(20, validation_alias="BATCH_TRIGGER_SIZE")
+    batch_trigger_max_wait: float = Field(5.0, validation_alias="BATCH_TRIGGER_MAX_WAIT")
+    batch_trigger_search_size: int = Field(10, validation_alias="BATCH_TRIGGER_SEARCH_SIZE")
+    batch_trigger_search_wait: float = Field(3.0, validation_alias="BATCH_TRIGGER_SEARCH_WAIT")
+
+    # Recalculation
+    recalculation_enabled: bool = Field(True, validation_alias="RECALCULATION_ENABLED")
+    recalculation_hours_old: int = Field(2, validation_alias="RECALCULATION_HOURS_OLD")
     recalculation_batch_size: int = Field(20, validation_alias="RECALCULATION_BATCH_SIZE")
+
+    # Safety Nets
+    stale_working_minutes: int = Field(10, validation_alias="STALE_WORKING_MINUTES")
+    max_retries: int = Field(3, validation_alias="MAX_RETRIES")
+    cleanup_days: int = Field(30, validation_alias="CLEANUP_DAYS")
+
+    # Diversity Filter
+    diversity_filter_threshold: float = Field(0.10, validation_alias="DIVERSITY_FILTER_THRESHOLD")
+    diversity_filter_histogram_bins: int = Field(64, validation_alias="DIVERSITY_FILTER_HISTOGRAM_BINS")
+    diversity_filter_compare_all: bool = Field(False, validation_alias="DIVERSITY_FILTER_COMPARE_ALL")
+    diversity_filter_min_dimension: int = Field(50, validation_alias="DIVERSITY_FILTER_MIN_DIMENSION")
+    diversity_filter_max_aspect_ratio: float = Field(5.0, validation_alias="DIVERSITY_FILTER_MAX_ASPECT_RATIO")
+    diversity_filter_max_images: int = Field(10, validation_alias="DIVERSITY_FILTER_MAX_IMAGES")
+    diversity_filter_min_images: int = Field(1, validation_alias="DIVERSITY_FILTER_MIN_IMAGES")
     
     # CLIP Model Configuration
     clip_model_name: str = Field("ViT-B-32", validation_alias="CLIP_MODEL_NAME")

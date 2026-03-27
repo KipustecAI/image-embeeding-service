@@ -1,0 +1,306 @@
+{
+    "total_matches": 50,
+    "processed_at": "2025-08-28T16:01:10.542190+00:00",
+    "results": [
+        {
+            "evidence_id": "c6a385f8-d386-4166-9e2c-c9e34f360aeb",
+            "similarity_score": 1.0,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/c6a385f8-d386-4166-9e2c-c9e34f360aeb/images/1756248571913_20250817-225047_000190.jpg",
+            "camera_id": "678e07bb-8de3-46e5-a8a1-6b14a04e4107"
+        },
+        {
+            "evidence_id": "f14e5723-6e6f-4e1f-9996-682d7a92ca67",
+            "similarity_score": 1.0,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/f14e5723-6e6f-4e1f-9996-682d7a92ca67/images/1756243548296_20250817-225047_000190.jpg",
+            "camera_id": "d2f9c077-cd03-46ec-a7c6-1596ed558a47"
+        },
+        {
+            "evidence_id": "0073c0d8-3c1b-4a40-8aec-ce8dbe5479bb",
+            "similarity_score": 1.0,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/0073c0d8-3c1b-4a40-8aec-ce8dbe5479bb/images/1756245650161_20250817-225047_000190.jpg",
+            "camera_id": "a8058c8d-8bee-4cd8-89fa-c91f519669db"
+        },
+        {
+            "evidence_id": "eb293f36-a0b6-40c1-b0d1-63c9287ee11e",
+            "similarity_score": 1.0,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/eb293f36-a0b6-40c1-b0d1-63c9287ee11e/images/1756244434140_20250817-225047_000190.jpg",
+            "camera_id": "bc5351e8-c25c-44e2-b93d-c6eab8372a0f"
+        },
+        {
+            "evidence_id": "e3bf65fa-c030-44d2-aeaa-e10ec69a13ed",
+            "similarity_score": 1.0,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/e3bf65fa-c030-44d2-aeaa-e10ec69a13ed/images/1756248564862_20250817-225047_000190.jpg",
+            "camera_id": "d018fe27-b98d-4445-a762-7f4c3b96ef7a"
+        },
+        {
+            "evidence_id": "e1cb3416-ec0c-4ded-bad5-fac4c0f34ff7",
+            "similarity_score": 1.0,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/e1cb3416-ec0c-4ded-bad5-fac4c0f34ff7/images/1756245975475_20250817-225047_000190.jpg",
+            "camera_id": "18fbb251-6b17-4b8b-a223-0abf28b0f7e1"
+        },
+        {
+            "evidence_id": "612644cc-9d4a-492a-b5f8-c0a0deb4f1f4",
+            "similarity_score": 1.0,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/612644cc-9d4a-492a-b5f8-c0a0deb4f1f4/images/1756249196141_20250817-225047_000190.jpg",
+            "camera_id": "3c11a968-ce11-4a00-8e36-053b26e3944a"
+        },
+        {
+            "evidence_id": "fc3c62a6-9daa-4d75-89ee-380d6375af3f",
+            "similarity_score": 1.0,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/fc3c62a6-9daa-4d75-89ee-380d6375af3f/images/1756244716155_20250817-225047_000190.jpg",
+            "camera_id": "f6523c01-2bb3-4d4f-a12f-7dc8e93d2345"
+        },
+        {
+            "evidence_id": "eb293f36-a0b6-40c1-b0d1-63c9287ee11e",
+            "similarity_score": 1.0,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/eb293f36-a0b6-40c1-b0d1-63c9287ee11e/images/1756244434140_20250817-225047_000190.jpg",
+            "camera_id": "bc5351e8-c25c-44e2-b93d-c6eab8372a0f"
+        },
+        {
+            "evidence_id": "69f3d419-db12-4b71-a503-f42258e7d67f",
+            "similarity_score": 1.0,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/69f3d419-db12-4b71-a503-f42258e7d67f/images/1756246873871_20250817-225047_000190.jpg",
+            "camera_id": "5e0b1ce2-ae59-4c22-ab4c-8700135e963f"
+        },
+        {
+            "evidence_id": "c937719a-cdfa-462b-8204-40164de371b5",
+            "similarity_score": 1.0,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/c937719a-cdfa-462b-8204-40164de371b5/images/1756248084566_20250817-225047_000190.jpg",
+            "camera_id": "1803b77c-cad8-464a-8172-0a367fb99fd3"
+        },
+        {
+            "evidence_id": "f14e5723-6e6f-4e1f-9996-682d7a92ca67",
+            "similarity_score": 1.0,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/f14e5723-6e6f-4e1f-9996-682d7a92ca67/images/1756243548296_20250817-225047_000190.jpg",
+            "camera_id": "d2f9c077-cd03-46ec-a7c6-1596ed558a47"
+        },
+        {
+            "evidence_id": "f14e5723-6e6f-4e1f-9996-682d7a92ca67",
+            "similarity_score": 1.0,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/f14e5723-6e6f-4e1f-9996-682d7a92ca67/images/1756243548296_20250817-225047_000190.jpg",
+            "camera_id": "d2f9c077-cd03-46ec-a7c6-1596ed558a47"
+        },
+        {
+            "evidence_id": "5a7b5c58-629f-4301-8089-00a17cd7805b",
+            "similarity_score": 1.0,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/5a7b5c58-629f-4301-8089-00a17cd7805b/images/1756243108885_20250817-225047_000190.jpg",
+            "camera_id": "f43a5fb6-a06b-4aaf-84c4-86416a6a43c3"
+        },
+        {
+            "evidence_id": "7283d0f5-bfc2-4160-8c39-4ac720695e40",
+            "similarity_score": 1.0,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/7283d0f5-bfc2-4160-8c39-4ac720695e40/images/1756248868174_20250817-225047_000190.jpg",
+            "camera_id": "b4aafc9c-2c18-4cc9-97e5-795dcb0b9b5a"
+        },
+        {
+            "evidence_id": "612644cc-9d4a-492a-b5f8-c0a0deb4f1f4",
+            "similarity_score": 1.0,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/612644cc-9d4a-492a-b5f8-c0a0deb4f1f4/images/1756249196141_20250817-225047_000190.jpg",
+            "camera_id": "3c11a968-ce11-4a00-8e36-053b26e3944a"
+        },
+        {
+            "evidence_id": "2d3c0955-108f-4b5d-bf9b-a0d96283456b",
+            "similarity_score": 1.0,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/2d3c0955-108f-4b5d-bf9b-a0d96283456b/images/1756246314511_20250817-225047_000190.jpg",
+            "camera_id": "e8614d5b-d419-40de-bd5a-e6288f904906"
+        },
+        {
+            "evidence_id": "c937719a-cdfa-462b-8204-40164de371b5",
+            "similarity_score": 1.0,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/c937719a-cdfa-462b-8204-40164de371b5/images/1756248084566_20250817-225047_000190.jpg",
+            "camera_id": "1803b77c-cad8-464a-8172-0a367fb99fd3"
+        },
+        {
+            "evidence_id": "0073c0d8-3c1b-4a40-8aec-ce8dbe5479bb",
+            "similarity_score": 1.0,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/0073c0d8-3c1b-4a40-8aec-ce8dbe5479bb/images/1756245650161_20250817-225047_000190.jpg",
+            "camera_id": "a8058c8d-8bee-4cd8-89fa-c91f519669db"
+        },
+        {
+            "evidence_id": "c6a385f8-d386-4166-9e2c-c9e34f360aeb",
+            "similarity_score": 1.0,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/c6a385f8-d386-4166-9e2c-c9e34f360aeb/images/1756248571913_20250817-225047_000190.jpg",
+            "camera_id": "678e07bb-8de3-46e5-a8a1-6b14a04e4107"
+        },
+        {
+            "evidence_id": "340167a3-74ea-402d-bdea-4388543739b1",
+            "similarity_score": 1.0,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/340167a3-74ea-402d-bdea-4388543739b1/images/1756243981692_20250817-225047_000190.jpg",
+            "camera_id": "1814ec15-b433-4c63-adeb-36b425a58688"
+        },
+        {
+            "evidence_id": "2d3c0955-108f-4b5d-bf9b-a0d96283456b",
+            "similarity_score": 1.0,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/2d3c0955-108f-4b5d-bf9b-a0d96283456b/images/1756246314511_20250817-225047_000190.jpg",
+            "camera_id": "e8614d5b-d419-40de-bd5a-e6288f904906"
+        },
+        {
+            "evidence_id": "fc3c62a6-9daa-4d75-89ee-380d6375af3f",
+            "similarity_score": 1.0,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/fc3c62a6-9daa-4d75-89ee-380d6375af3f/images/1756244716155_20250817-225047_000190.jpg",
+            "camera_id": "f6523c01-2bb3-4d4f-a12f-7dc8e93d2345"
+        },
+        {
+            "evidence_id": "e1cb3416-ec0c-4ded-bad5-fac4c0f34ff7",
+            "similarity_score": 1.0,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/e1cb3416-ec0c-4ded-bad5-fac4c0f34ff7/images/1756245975475_20250817-225047_000190.jpg",
+            "camera_id": "18fbb251-6b17-4b8b-a223-0abf28b0f7e1"
+        },
+        {
+            "evidence_id": "340167a3-74ea-402d-bdea-4388543739b1",
+            "similarity_score": 1.0,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/340167a3-74ea-402d-bdea-4388543739b1/images/1756243981692_20250817-225047_000190.jpg",
+            "camera_id": "1814ec15-b433-4c63-adeb-36b425a58688"
+        },
+        {
+            "evidence_id": "7283d0f5-bfc2-4160-8c39-4ac720695e40",
+            "similarity_score": 1.0,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/7283d0f5-bfc2-4160-8c39-4ac720695e40/images/1756248868174_20250817-225047_000190.jpg",
+            "camera_id": "b4aafc9c-2c18-4cc9-97e5-795dcb0b9b5a"
+        },
+        {
+            "evidence_id": "e3bf65fa-c030-44d2-aeaa-e10ec69a13ed",
+            "similarity_score": 1.0,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/e3bf65fa-c030-44d2-aeaa-e10ec69a13ed/images/1756248564862_20250817-225047_000190.jpg",
+            "camera_id": "d018fe27-b98d-4445-a762-7f4c3b96ef7a"
+        },
+        {
+            "evidence_id": "69f3d419-db12-4b71-a503-f42258e7d67f",
+            "similarity_score": 1.0,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/69f3d419-db12-4b71-a503-f42258e7d67f/images/1756246873871_20250817-225047_000190.jpg",
+            "camera_id": "5e0b1ce2-ae59-4c22-ab4c-8700135e963f"
+        },
+        {
+            "evidence_id": "5a7b5c58-629f-4301-8089-00a17cd7805b",
+            "similarity_score": 1.0,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/5a7b5c58-629f-4301-8089-00a17cd7805b/images/1756243108885_20250817-225047_000190.jpg",
+            "camera_id": "f43a5fb6-a06b-4aaf-84c4-86416a6a43c3"
+        },
+        {
+            "evidence_id": "5a7b5c58-629f-4301-8089-00a17cd7805b",
+            "similarity_score": 1.0,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/5a7b5c58-629f-4301-8089-00a17cd7805b/images/1756243108885_20250817-225047_000190.jpg",
+            "camera_id": "f43a5fb6-a06b-4aaf-84c4-86416a6a43c3"
+        },
+        {
+            "evidence_id": "f14e5723-6e6f-4e1f-9996-682d7a92ca67",
+            "similarity_score": 0.99558806,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/f14e5723-6e6f-4e1f-9996-682d7a92ca67/images/1756243550028_20250817-225047_000184.jpg",
+            "camera_id": "d2f9c077-cd03-46ec-a7c6-1596ed558a47"
+        },
+        {
+            "evidence_id": "eb293f36-a0b6-40c1-b0d1-63c9287ee11e",
+            "similarity_score": 0.99558806,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/eb293f36-a0b6-40c1-b0d1-63c9287ee11e/images/1756244437226_20250817-225047_000184.jpg",
+            "camera_id": "bc5351e8-c25c-44e2-b93d-c6eab8372a0f"
+        },
+        {
+            "evidence_id": "c6a385f8-d386-4166-9e2c-c9e34f360aeb",
+            "similarity_score": 0.99558806,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/c6a385f8-d386-4166-9e2c-c9e34f360aeb/images/1756248573460_20250817-225047_000184.jpg",
+            "camera_id": "678e07bb-8de3-46e5-a8a1-6b14a04e4107"
+        },
+        {
+            "evidence_id": "f14e5723-6e6f-4e1f-9996-682d7a92ca67",
+            "similarity_score": 0.99558806,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/f14e5723-6e6f-4e1f-9996-682d7a92ca67/images/1756243550028_20250817-225047_000184.jpg",
+            "camera_id": "d2f9c077-cd03-46ec-a7c6-1596ed558a47"
+        },
+        {
+            "evidence_id": "340167a3-74ea-402d-bdea-4388543739b1",
+            "similarity_score": 0.99558806,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/340167a3-74ea-402d-bdea-4388543739b1/images/1756243983863_20250817-225047_000184.jpg",
+            "camera_id": "1814ec15-b433-4c63-adeb-36b425a58688"
+        },
+        {
+            "evidence_id": "612644cc-9d4a-492a-b5f8-c0a0deb4f1f4",
+            "similarity_score": 0.99558806,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/612644cc-9d4a-492a-b5f8-c0a0deb4f1f4/images/1756249198196_20250817-225047_000184.jpg",
+            "camera_id": "3c11a968-ce11-4a00-8e36-053b26e3944a"
+        },
+        {
+            "evidence_id": "0073c0d8-3c1b-4a40-8aec-ce8dbe5479bb",
+            "similarity_score": 0.99558806,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/0073c0d8-3c1b-4a40-8aec-ce8dbe5479bb/images/1756245652257_20250817-225047_000184.jpg",
+            "camera_id": "a8058c8d-8bee-4cd8-89fa-c91f519669db"
+        },
+        {
+            "evidence_id": "2d3c0955-108f-4b5d-bf9b-a0d96283456b",
+            "similarity_score": 0.99558806,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/2d3c0955-108f-4b5d-bf9b-a0d96283456b/images/1756246316579_20250817-225047_000184.jpg",
+            "camera_id": "e8614d5b-d419-40de-bd5a-e6288f904906"
+        },
+        {
+            "evidence_id": "fc3c62a6-9daa-4d75-89ee-380d6375af3f",
+            "similarity_score": 0.99558806,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/fc3c62a6-9daa-4d75-89ee-380d6375af3f/images/1756244718152_20250817-225047_000184.jpg",
+            "camera_id": "f6523c01-2bb3-4d4f-a12f-7dc8e93d2345"
+        },
+        {
+            "evidence_id": "e1cb3416-ec0c-4ded-bad5-fac4c0f34ff7",
+            "similarity_score": 0.99558806,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/e1cb3416-ec0c-4ded-bad5-fac4c0f34ff7/images/1756245977494_20250817-225047_000184.jpg",
+            "camera_id": "18fbb251-6b17-4b8b-a223-0abf28b0f7e1"
+        },
+        {
+            "evidence_id": "e1cb3416-ec0c-4ded-bad5-fac4c0f34ff7",
+            "similarity_score": 0.99558806,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/e1cb3416-ec0c-4ded-bad5-fac4c0f34ff7/images/1756245977494_20250817-225047_000184.jpg",
+            "camera_id": "18fbb251-6b17-4b8b-a223-0abf28b0f7e1"
+        },
+        {
+            "evidence_id": "69f3d419-db12-4b71-a503-f42258e7d67f",
+            "similarity_score": 0.99558806,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/69f3d419-db12-4b71-a503-f42258e7d67f/images/1756246875832_20250817-225047_000184.jpg",
+            "camera_id": "5e0b1ce2-ae59-4c22-ab4c-8700135e963f"
+        },
+        {
+            "evidence_id": "69f3d419-db12-4b71-a503-f42258e7d67f",
+            "similarity_score": 0.99558806,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/69f3d419-db12-4b71-a503-f42258e7d67f/images/1756246875832_20250817-225047_000184.jpg",
+            "camera_id": "5e0b1ce2-ae59-4c22-ab4c-8700135e963f"
+        },
+        {
+            "evidence_id": "fc3c62a6-9daa-4d75-89ee-380d6375af3f",
+            "similarity_score": 0.99558806,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/fc3c62a6-9daa-4d75-89ee-380d6375af3f/images/1756244718152_20250817-225047_000184.jpg",
+            "camera_id": "f6523c01-2bb3-4d4f-a12f-7dc8e93d2345"
+        },
+        {
+            "evidence_id": "7283d0f5-bfc2-4160-8c39-4ac720695e40",
+            "similarity_score": 0.99558806,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/7283d0f5-bfc2-4160-8c39-4ac720695e40/images/1756248870137_20250817-225047_000184.jpg",
+            "camera_id": "b4aafc9c-2c18-4cc9-97e5-795dcb0b9b5a"
+        },
+        {
+            "evidence_id": "e3bf65fa-c030-44d2-aeaa-e10ec69a13ed",
+            "similarity_score": 0.99558806,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/e3bf65fa-c030-44d2-aeaa-e10ec69a13ed/images/1756248566457_20250817-225047_000184.jpg",
+            "camera_id": "d018fe27-b98d-4445-a762-7f4c3b96ef7a"
+        },
+        {
+            "evidence_id": "340167a3-74ea-402d-bdea-4388543739b1",
+            "similarity_score": 0.99558806,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/340167a3-74ea-402d-bdea-4388543739b1/images/1756243983863_20250817-225047_000184.jpg",
+            "camera_id": "1814ec15-b433-4c63-adeb-36b425a58688"
+        },
+        {
+            "evidence_id": "5a7b5c58-629f-4301-8089-00a17cd7805b",
+            "similarity_score": 0.99558806,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/5a7b5c58-629f-4301-8089-00a17cd7805b/images/1756243110616_20250817-225047_000184.jpg",
+            "camera_id": "f43a5fb6-a06b-4aaf-84c4-86416a6a43c3"
+        },
+        {
+            "evidence_id": "5a7b5c58-629f-4301-8089-00a17cd7805b",
+            "similarity_score": 0.99558806,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/5a7b5c58-629f-4301-8089-00a17cd7805b/images/1756243110616_20250817-225047_000184.jpg",
+            "camera_id": "f43a5fb6-a06b-4aaf-84c4-86416a6a43c3"
+        },
+        {
+            "evidence_id": "c937719a-cdfa-462b-8204-40164de371b5",
+            "similarity_score": 0.99558806,
+            "image_url": "https://lookia.mx/api/minio/lucam-assets/evidences/c937719a-cdfa-462b-8204-40164de371b5/images/1756248086181_20250817-225047_000184.jpg",
+            "camera_id": "1803b77c-cad8-464a-8172-0a367fb99fd3"
+        }
+    ]
+}

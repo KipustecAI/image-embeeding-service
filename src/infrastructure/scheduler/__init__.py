@@ -1,5 +1,1 @@
-"""Scheduler infrastructure."""
-
-from .arq_scheduler import create_scheduler_settings, EmbeddingScheduler
-
-__all__ = ["create_scheduler_settings", "EmbeddingScheduler"]
+# Legacy scheduler — replaced by event-driven pipeline (streams + batch triggers + safety nets)

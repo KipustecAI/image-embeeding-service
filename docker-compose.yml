@@ -1,4 +1,40 @@
 services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: embedding-postgres
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: embedding_service
+      POSTGRES_USER: embed_user
+      POSTGRES_PASSWORD: embed_pass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U embed_user -d embedding_service"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - embedding-network
+
+  # Redis (ARQ + Streams)
+  redis:
+    image: redis:7-alpine
+    container_name: embedding-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - embedding-network
+
   # Qdrant Vector Database
   qdrant:
     image: qdrant/qdrant:latest
@@ -52,4 +88,6 @@ networks:
     driver: bridge
 
 volumes:
+  postgres_data:
+  redis_data:
   qdrant_data:

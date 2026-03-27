@@ -1,22 +1,13 @@
 #!/usr/bin/env python
-"""Worker script for running the ARQ scheduler."""
+"""ARQ worker entry point — processes embedding and search jobs."""
 
 import sys
 from pathlib import Path
 
-# Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
 
 from arq import run_worker
-from src.infrastructure.scheduler.arq_scheduler import WorkerSettings
-import logging
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+from src.workers.main import WorkerSettings
 
 if __name__ == "__main__":
-    # Run the worker with loaded settings
     run_worker(WorkerSettings)
