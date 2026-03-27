@@ -1,57 +1,46 @@
-# API Reference (v2.0)
+# API Reference (v2.1)
 
 Base URL: `http://localhost:8001`
 
-## Architecture Overview
-
-This is an **event-driven** service. Work arrives via Redis Streams, not HTTP polling:
-
-```
-Redis Stream (evidence:embed / evidence:search)
-       │
-       ▼
-  StreamConsumer ──► DB row (status=1) ──► BatchTrigger ──► ARQ Worker
-       │                                                        │
-       │                                                        ▼
-       │                                              Qdrant + PostgreSQL
-       │
-  The HTTP API is for monitoring, manual triggers, and querying results.
-```
-
 ## Authentication
 
-Endpoints marked with **Auth** require the `X-API-Key` header:
+This service runs behind the API Gateway. The gateway authenticates requests and injects user context as HTTP headers. **No API key needed.**
 
-```
-X-API-Key: <EMBEDDING_SERVICE_API_KEY>
-```
+| Header | Type | Description |
+|--------|------|-------------|
+| `X-User-Id` | UUID | Authenticated user's ID (always present) |
+| `X-User-Role` | string | User role: `root`, `dev`, `admin`, `user`, `guest` |
+| `X-Request-Id` | UUID | Request tracing ID |
+| `X-User-Scopes` | string | Comma-separated permission scopes |
+| `X-App-Type` | integer | Application type: 1=LOOKIA, 2=PARKIA, 3=GOBIA |
 
-Missing or invalid keys return `401 Unauthorized`.
+See [GATEWAY_HEADERS.md](../../lookia/microservices/video-server_microservicios_apigateway/docs/GATEWAY_HEADERS.md) for full details.
 
 ---
 
 ## Endpoints Summary
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `/` | No | Service info |
-| GET | `/health` | No | Component health check |
-| GET | `/api/v1/stats` | No | Pipeline DB counts + CLIP config |
-| GET | `/api/v1/pipeline/status` | No | Full status (DB counts + triggers + consumers) |
-| POST | `/api/v1/internal/trigger/{name}` | No | Cross-process trigger notification |
-| POST | `/api/v1/recalculate/searches` | Yes | Manually re-queue searches for recalculation |
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/` | Service info |
+| GET | `/health` | Component health check |
+| GET | `/api/v1/stats` | Pipeline counts + Qdrant stats |
+| GET | `/api/v1/pipeline/status` | Full status (counts + consumers) |
+| POST | `/api/v1/search` | Submit a similarity search |
+| GET | `/api/v1/search/{search_id}` | Get search status |
+| GET | `/api/v1/search/{search_id}/matches` | Get match results (paginated) |
+| GET | `/api/v1/search/user/{user_id}` | List searches by user (paginated) |
+| POST | `/api/v1/recalculate/searches` | Re-queue old searches for recalculation |
 
 ---
 
 ## GET / — Service Info
 
-No auth. Returns basic service info.
-
 **Response:**
 ```json
 {
-  "service": "Image Embedding Service",
-  "version": "2.0.0",
+  "service": "Image Embedding Backend",
+  "version": "2.1.0",
   "status": "running",
   "environment": "development"
 }
@@ -61,7 +50,7 @@ No auth. Returns basic service info.
 
 ## GET /health — Health Check
 
-No auth. Checks PostgreSQL, scheduler, batch triggers, and stream consumers.
+Checks PostgreSQL, Qdrant, scheduler, and stream consumers.
 
 **Response (200):**
 ```json
@@ -69,69 +58,41 @@ No auth. Checks PostgreSQL, scheduler, batch triggers, and stream consumers.
   "status": "healthy",
   "components": {
     "database": true,
+    "qdrant": true,
     "scheduler": true
-  },
-  "triggers": {
-    "embedding": {
-      "name": "embedding",
-      "running": true,
-      "pending_count": 0,
-      "batch_size": 20,
-      "max_wait_seconds": 5.0,
-      "has_active_timer": false,
-      "total_flushes": 12,
-      "total_events": 45,
-      "flush_reasons": {"batch_full": 2, "timeout": 10, "manual": 0, "shutdown": 0}
-    },
-    "search": { "..." : "same structure" }
   },
   "consumers": {
     "embed": {
-      "stream": "evidence:embed",
-      "group": "embed-workers",
-      "consumer": "hostname-123",
+      "stream": "embeddings:results",
+      "group": "backend-workers",
       "running": true,
       "thread_alive": true,
-      "messages_processed": 45,
+      "messages_processed": 12,
       "messages_failed": 0,
       "messages_dead_lettered": 0
     },
-    "search": { "..." : "same structure" }
+    "search": { "...": "same structure" }
   }
 }
 ```
-
-Returns `"status": "degraded"` if any component is down.
 
 ---
 
 ## GET /api/v1/stats — Service Statistics
 
-No auth. Returns pipeline request counts by status and CLIP configuration.
-
 **Response:**
 ```json
 {
-  "service": "Image Embedding Service",
+  "service": "Image Embedding Backend",
   "pipeline": {
-    "embedding_requests": {
-      "to_work": 0,
-      "working": 2,
-      "embedded": 35,
-      "done": 120,
-      "error": 3
-    },
-    "search_requests": {
-      "to_work": 0,
-      "working": 0,
-      "completed": 18,
-      "error": 1
-    }
+    "embedding_requests": { "to_work": 0, "working": 0, "embedded": 5, "done": 0, "error": 0 },
+    "search_requests": { "to_work": 0, "working": 0, "completed": 3, "error": 0 }
   },
-  "configuration": {
-    "model": "ViT-B-32",
-    "device": "cuda",
-    "vector_size": 512
+  "qdrant": {
+    "collection_name": "evidence_embeddings",
+    "vector_size": 512,
+    "distance_metric": "Cosine",
+    "points_count": 5
   }
 }
 ```
@@ -140,71 +101,184 @@ No auth. Returns pipeline request counts by status and CLIP configuration.
 
 ## GET /api/v1/pipeline/status — Full Pipeline Status
 
-No auth. Combined view for monitoring and E2E test scripts. Includes DB counts, trigger metrics, and consumer health in one call.
+Combined view for monitoring scripts. Returns DB counts + consumer health.
 
 **Response:**
 ```json
 {
   "status_counts": {
-    "embedding": { "to_work": 0, "working": 0, "embedded": 35, "done": 120, "error": 3 },
-    "search": { "to_work": 0, "working": 0, "completed": 18, "error": 1 }
-  },
-  "triggers": {
-    "embedding": { "total_flushes": 12, "total_events": 45, "pending_count": 0, "..." : "..." },
-    "search": { "total_flushes": 5, "total_events": 18, "pending_count": 0, "..." : "..." }
+    "embedding": { "to_work": 0, "working": 0, "embedded": 5, "done": 0, "error": 0 },
+    "search": { "to_work": 0, "working": 0, "completed": 3, "error": 0 }
   },
   "consumers": {
-    "embed": { "running": true, "messages_processed": 45, "messages_failed": 0, "..." : "..." },
-    "search": { "running": true, "messages_processed": 18, "messages_failed": 0, "..." : "..." }
+    "embed": { "running": true, "messages_processed": 12, "...": "..." },
+    "search": { "running": true, "messages_processed": 3, "...": "..." }
   }
 }
 ```
 
 ---
 
-## POST /api/v1/internal/trigger/{trigger_name} — Notify Trigger
+## POST /api/v1/search — Submit Similarity Search
 
-No auth. Called by the ARQ worker (separate process) to notify in-memory batch triggers. The worker cannot access triggers directly since they live in the API process memory.
+Creates a search request and publishes it to the GPU compute stream. The GPU computes the CLIP embedding, and the backend executes the Qdrant search when the vector returns.
 
-**Path Parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| trigger_name | string | `embedding` or `search` |
-
-**Query Parameters:**
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| count | int | 1 | Number of items to notify |
-
-**Response (200):**
+**Request Body:**
 ```json
 {
-  "notified": true,
-  "trigger": "embedding",
-  "count": 5
+  "image_url": "https://storage.example.com/query.jpg",
+  "threshold": 0.75,
+  "max_results": 50,
+  "metadata": {
+    "camera_id": "660e8400-..."
+  }
 }
 ```
 
-**Response (404):** Trigger name not found.
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| image_url | string | yes | | URL of the image to search with |
+| threshold | float | no | 0.75 | Minimum cosine similarity (0.0-1.0) |
+| max_results | int | no | 50 | Maximum number of results |
+| metadata | object | no | null | Filter conditions (camera_id, object_type) |
+
+`user_id` is automatically taken from the `X-User-Id` gateway header.
+
+**Response (202 Accepted):**
+```json
+{
+  "search_id": "e6b50483-df9b-4ee8-969a-88708c039430",
+  "status": "pending",
+  "message": "Search submitted, check status at /api/v1/search/e6b50483-..."
+}
+```
+
+**Data Flow:**
+```
+POST /api/v1/search
+  → DB row (status=pending)
+  → XADD evidence:search (to GPU)
+  → GPU computes CLIP vector
+  → XADD search:results (back to backend)
+  → Backend searches Qdrant → stores matches in DB
+  → status=completed
+```
+
+---
+
+## GET /api/v1/search/{search_id} — Search Status
+
+Returns search status and summary. **Does not include match results** — use the `/matches` endpoint for that.
+
+**Response (completed):**
+```json
+{
+  "search_id": "e6b50483-...",
+  "user_id": "550e8400-...",
+  "image_url": "https://storage.example.com/query.jpg",
+  "status": "completed",
+  "similarity_status": "matches_found",
+  "total_matches": 3,
+  "threshold": 0.75,
+  "max_results": 50,
+  "created_at": "2026-03-27T20:47:44.590000",
+  "completed_at": "2026-03-27T20:47:44.770000",
+  "error": null
+}
+```
+
+**Status values:** `pending`, `working`, `completed`, `error`
+
+**Similarity status values:** `no_matches`, `matches_found`
+
+**Response (404):**
+```json
+{ "detail": "Search not found" }
+```
+
+---
+
+## GET /api/v1/search/{search_id}/matches — Match Results (Paginated)
+
+Returns individual match results sorted by similarity score (highest first).
+
+**Query Parameters:**
+
+| Parameter | Type | Default | Range | Description |
+|-----------|------|---------|-------|-------------|
+| limit | int | 20 | 1-100 | Results per page |
+| offset | int | 0 | 0+ | Skip N results |
+
+**Response:**
+```json
+{
+  "search_id": "e6b50483-...",
+  "total": 3,
+  "limit": 20,
+  "offset": 0,
+  "matches": [
+    {
+      "evidence_id": "test-1774641848-7055",
+      "camera_id": "f39d4374-8a68-4b34-b3ef-5a0514e81d92",
+      "similarity_score": 0.8349,
+      "image_url": "https://storage.example.com/crop.jpg",
+      "metadata": {
+        "source_type": "evidence",
+        "image_index": 0,
+        "total_images": 1
+      }
+    }
+  ]
+}
+```
+
+---
+
+## GET /api/v1/search/user/{user_id} — List User Searches (Paginated)
+
+Returns all searches by a user, most recent first.
+
+**Query Parameters:**
+
+| Parameter | Type | Default | Range |
+|-----------|------|---------|-------|
+| limit | int | 20 | 1-100 |
+| offset | int | 0 | 0+ |
+
+**Response:**
+```json
+{
+  "user_id": "550e8400-...",
+  "total": 25,
+  "limit": 20,
+  "offset": 0,
+  "searches": [
+    {
+      "search_id": "e6b50483-...",
+      "status": "completed",
+      "similarity_status": "matches_found",
+      "total_matches": 3,
+      "image_url": "https://storage.example.com/query.jpg",
+      "created_at": "2026-03-27T20:47:44.590000"
+    }
+  ]
+}
+```
 
 ---
 
 ## POST /api/v1/recalculate/searches — Recalculate Searches
 
-**Auth required.** Re-queues completed searches back to `status=1` so the pipeline reprocesses them against the current Qdrant state. Useful when new evidence has been embedded since the original search.
-
-Eligible searches: `status=COMPLETED` + `similarity_status=MATCHES_FOUND` + processed more than `hours_old` ago.
+Re-queues old completed searches for reprocessing against the current Qdrant state.
 
 **Query Parameters:**
 
 | Parameter | Type | Default | Range | Description |
 |-----------|------|---------|-------|-------------|
 | limit | int | 20 | 1-100 | Max searches to recalculate |
-| hours_old | int | 2 | 1-168 | Only searches processed > X hours ago |
+| hours_old | int | 2 | 1-168 | Only searches older than X hours |
 
-**Response (200):**
+**Response:**
 ```json
 {
   "success": true,
@@ -213,166 +287,39 @@ Eligible searches: `status=COMPLETED` + `similarity_status=MATCHES_FOUND` + proc
 }
 ```
 
-**Response (200, nothing to do):**
-```json
-{
-  "success": true,
-  "message": "No searches eligible",
-  "total": 0
-}
-```
-
 ---
 
-## Event-Driven Processing Flows
+## Event-Driven Processing
 
-### Evidence Embedding
-
-Input arrives via Redis Stream `evidence:embed`, not HTTP.
+### Evidence Embedding (via Redis Streams)
 
 ```
-Video Server / ETL
-       │
-       │ XADD evidence:embed { evidence.ready.embed, payload: { evidence_id, camera_id, image_urls } }
-       ▼
-  StreamConsumer (daemon thread)
-       │
-       ├─ Dedup check (evidence_id already in DB?)
-       ├─ Diversity filter (Bhattacharyya histogram, skip near-duplicate crops)
-       ├─ Create embedding_request row (status=1)
-       └─ BatchTrigger.notify()
-              │
-              ├─ Flush when count >= 20 OR timeout 5s
-              ▼
-         ARQ Worker: process_evidence_embeddings_batch
-              │
-              ├─ Phase 1: Parallel image download + CLIP embed (asyncio.gather)
-              ├─ Phase 2: Bulk Qdrant upsert (1 call) + bulk DB commit (1 call)
-              └─ Update status → EMBEDDED (3)
+Video Server → XADD evidence:embed → GPU compute → XADD embeddings:results → Backend → Qdrant + DB
 ```
 
-### Image Search
+The backend consumer receives pre-computed 512-dim vectors and stores them directly in Qdrant + PostgreSQL. No ARQ queue — ~70ms per upsert.
 
-Input arrives via Redis Stream `evidence:search`.
+### Image Search (via API + Redis Streams)
 
 ```
-Video Server
-       │
-       │ XADD evidence:search { search.created, payload: { search_id, user_id, image_url, threshold, metadata } }
-       ▼
-  StreamConsumer (daemon thread)
-       │
-       ├─ Dedup check
-       ├─ Create search_request row (status=1)
-       └─ BatchTrigger.notify()
-              │
-              ▼
-         ARQ Worker: process_image_searches_batch
-              │
-              ├─ Download query image + CLIP embed
-              ├─ Qdrant similarity search (cosine, with metadata filters)
-              └─ Update status → COMPLETED (3), set similarity_status + total_matches
+POST /api/v1/search → XADD evidence:search → GPU compute → XADD search:results → Backend → Qdrant search → DB
 ```
 
-## Safety Nets (Background Jobs)
-
-These run automatically via APScheduler inside the API process:
-
-| Job | Interval | Purpose |
-|-----|----------|---------|
-| `embedding_safety_net` | 60s | Catch status=1 embedding rows missed by BatchTrigger |
-| `search_safety_net` | 120s | Catch status=1 search rows missed by BatchTrigger |
-| `recover_stale_working` | 5m | Reset status=2 rows stuck >10min back to status=1 |
-| `recalculate_searches` | 1h | Re-queue old completed searches for reprocessing |
-| `cleanup_old_requests` | 24h | Delete completed/error rows older than 30 days |
+End-to-end latency: ~2 seconds.
 
 ## Database Tables
 
-### embedding_requests
+| Table | Purpose |
+|-------|---------|
+| `embedding_requests` | Tracks each evidence through the embedding pipeline |
+| `evidence_embeddings` | One row per vector stored in Qdrant (FK → embedding_requests) |
+| `search_requests` | Tracks each similarity search lifecycle |
+| `search_matches` | Individual match results per search (FK → search_requests) |
 
-| Column | Type | Description |
-|--------|------|-------------|
-| id | UUID | Primary key |
-| evidence_id | string | External evidence reference (indexed) |
-| camera_id | string | Source camera (indexed) |
-| status | int | Pipeline status (indexed) |
-| image_urls | JSONB | List of image URLs to embed |
-| worker_id | string | Which worker picked it up |
-| error_message | text | Error details if failed |
-| retry_count | int | Times retried |
-| stream_message_id | string | Redis Stream message ID |
-| created_at | datetime | Row creation time (indexed) |
+## Background Jobs
 
-### evidence_embeddings
-
-| Column | Type | Description |
-|--------|------|-------------|
-| id | UUID | Primary key |
-| request_id | UUID | FK → embedding_requests |
-| qdrant_point_id | string | Qdrant vector ID (unique, indexed) |
-| image_index | int | Which image in the evidence |
-| image_url | text | Source image URL |
-| json_data | JSONB | Metadata stored in Qdrant |
-
-### search_requests
-
-| Column | Type | Description |
-|--------|------|-------------|
-| id | UUID | Primary key |
-| search_id | string | External search reference (indexed) |
-| user_id | string | Requesting user (indexed) |
-| image_url | text | Query image URL |
-| status | int | Pipeline status (indexed) |
-| similarity_status | int | 1=NO_MATCHES, 2=MATCHES_FOUND |
-| threshold | float | Cosine similarity threshold |
-| max_results | int | Max results to return |
-| search_metadata | JSONB | Filters (camera_id, date range, etc.) |
-| total_matches | int | Number of matches found |
-
-## Status Codes
-
-### Embedding Requests
-
-| Status | Name | Description |
-|--------|------|-------------|
-| 1 | TO_WORK | Created, waiting for BatchTrigger to dispatch |
-| 2 | WORKING | Picked up by ARQ worker |
-| 3 | EMBEDDED | CLIP vectors stored in Qdrant |
-| 4 | DONE | Fully processed |
-| 5 | ERROR | Failed (see error_message) |
-
-### Search Requests
-
-| Status | Name | Description |
-|--------|------|-------------|
-| 1 | TO_WORK | Created, waiting for dispatch |
-| 2 | WORKING | Picked up by ARQ worker |
-| 3 | COMPLETED | Search executed, results stored |
-| 4 | ERROR | Failed (see error_message) |
-
-### Similarity Status
-
-| Status | Name |
-|--------|------|
-| 1 | NO_MATCHES |
-| 2 | MATCHES_FOUND |
-
-## Qdrant Payload Structure
-
-Each stored embedding in the `evidence_embeddings` collection:
-
-```json
-{
-  "source_type": "evidence",
-  "evidence_id": "uuid-string",
-  "camera_id": "uuid-string",
-  "image_index": 0,
-  "total_images": 3,
-  "image_url": "https://storage.example.com/crop.jpg",
-  "created_at": "2026-03-27T12:00:00Z"
-}
-```
-
-**Indexed fields:** `source_type`, `camera_id`, `evidence_id`.
-
-**Vector:** 512-dimensional CLIP ViT-B-32, cosine distance.
+| Job | Interval | Purpose |
+|-----|----------|---------|
+| Stale recovery | 5m | Reset stuck WORKING rows back to TO_WORK |
+| Recalculation | 1h | Re-run old searches against new evidence |
+| Cleanup | 24h | Delete completed/error rows older than 30 days |
