@@ -245,21 +245,124 @@ test_mock() {
   fi
 }
 
+# ── Test: Search API (POST → GPU → backend → GET results) ──
+test_search() {
+  printf "\n${BOLD}═══════════════════════════════════════════════════${NC}\n"
+  printf "${BOLD}  E2E Test: Search API${NC}\n"
+  printf "${BOLD}═══════════════════════════════════════════════════${NC}\n\n"
+
+  # Check backend
+  if ! curl -sf "${BACKEND_URL}/health" > /dev/null 2>&1; then
+    fail "Backend not reachable at ${BACKEND_URL}"; exit 1
+  fi
+  ok "Backend is up"
+
+  # Pick search image (dedicated search image or first from inputs)
+  local search_image="${PROJECT_DIR}/data/20260323-225246_240217.jpg"
+  if [[ ! -f "$search_image" ]]; then
+    search_image=$(ls "$INPUT_DIR"/*.{jpg,JPG,jpeg,png} 2>/dev/null | head -1)
+  fi
+  if [[ -z "$search_image" ]]; then
+    fail "No search image found"; exit 1
+  fi
+  ok "Using search image: $(basename "$search_image")"
+
+  local user_id="test-user-$(date +%s)"
+  START_TIME=$(date +%s)
+
+  # 1. POST /api/v1/search
+  log "Submitting search via API..."
+  local response=$(curl -sf -X POST "${BACKEND_URL}/api/v1/search" \
+    -H "X-API-Key: ${API_KEY}" \
+    -H "Content-Type: application/json" \
+    -d "{\"image_url\":\"file://${search_image}\",\"user_id\":\"${user_id}\",\"threshold\":0.3,\"max_results\":20}")
+
+  if [[ -z "$response" ]]; then
+    fail "POST /api/v1/search failed"; exit 1
+  fi
+
+  local search_id=$(echo "$response" | python3 -c "import sys,json; print(json.load(sys.stdin)['search_id'])")
+  ok "Search created: ${search_id}"
+
+  # 2. Poll GET /api/v1/search/{search_id} until completed
+  log "Waiting for search to complete..."
+  local elapsed=0
+  local search_status="pending"
+  while [[ $elapsed -lt 60 && "$search_status" != "completed" && "$search_status" != "error" ]]; do
+    sleep 2
+    elapsed=$((elapsed + 2))
+    search_status=$(curl -sf "${BACKEND_URL}/api/v1/search/${search_id}" \
+      -H "X-API-Key: ${API_KEY}" | \
+      python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "pending")
+    echo "  [${elapsed}s] status=${search_status}"
+  done
+
+  # 3. Get final status
+  local final=$(curl -sf "${BACKEND_URL}/api/v1/search/${search_id}" -H "X-API-Key: ${API_KEY}")
+  local total_matches=$(echo "$final" | python3 -c "import sys,json; print(json.load(sys.stdin)['total_matches'])")
+  local final_status=$(echo "$final" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])")
+
+  echo ""
+  END_TIME=$(date +%s)
+  TOTAL_TIME=$((END_TIME - START_TIME))
+
+  # 4. Get matches (paginated)
+  if [[ "$final_status" == "completed" && "$total_matches" -gt 0 ]]; then
+    log "Fetching matches..."
+    local matches=$(curl -sf "${BACKEND_URL}/api/v1/search/${search_id}/matches?limit=5" \
+      -H "X-API-Key: ${API_KEY}")
+    echo "$matches" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+print(f\"  Total matches: {data['total']}\")
+for m in data['matches']:
+    print(f\"    {m['evidence_id'][:20]:20s}  score={m['similarity_score']:.4f}  {m.get('image_url','')[:50]}\")
+" 2>/dev/null
+  fi
+
+  # 5. List user searches
+  log "Listing user searches..."
+  local user_searches=$(curl -sf "${BACKEND_URL}/api/v1/search/user/${user_id}" \
+    -H "X-API-Key: ${API_KEY}")
+  local user_total=$(echo "$user_searches" | python3 -c "import sys,json; print(json.load(sys.stdin)['total'])" 2>/dev/null)
+  echo "  User ${user_id} has ${user_total} search(es)"
+
+  # Results
+  printf "\n${BOLD}Results:${NC}\n"
+  echo "  Time:      ${TOTAL_TIME}s"
+  echo "  Status:    ${final_status}"
+  echo "  Matches:   ${total_matches}"
+  echo ""
+
+  if [[ "$final_status" == "completed" ]]; then
+    ok "SEARCH PASS — POST → GPU → Qdrant search → matches stored"
+  elif [[ "$final_status" == "error" ]]; then
+    fail "SEARCH FAIL — error occurred"
+    echo "$final" | python3 -m json.tool 2>/dev/null
+  else
+    warn "SEARCH TIMEOUT — still ${final_status} after ${TOTAL_TIME}s"
+  fi
+}
+
 # ── Main ──
 case "${1:-}" in
   --mock)
     test_mock
     ;;
+  --search)
+    test_search
+    ;;
   --help|-h)
-    echo "Usage: $0 [--mock|--help]"
+    echo "Usage: $0 [--mock|--search|--help]"
     echo ""
-    echo "  (no args)   Full pipeline test: evidence:embed → compute → backend"
-    echo "  --mock      Backend-only test: publish mock vectors to embeddings:results"
+    echo "  (no args)     Full embedding pipeline test"
+    echo "  --search      Search API test (POST → GPU → GET matches)"
+    echo "  --mock        Backend-only test (no GPU needed)"
     echo ""
     echo "Prerequisites:"
     echo "  1. make docker-up && make migrate"
-    echo "  2. embedding-compute running (for full test)"
-    echo "  3. make run-api + make run-worker"
+    echo "  2. embedding-compute running (for full and search tests)"
+    echo "  3. make run-api"
     ;;
   *)
     test_full_pipeline
