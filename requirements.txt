@@ -5,15 +5,9 @@ pydantic==2.10.3
 pydantic-settings==2.6.1
 python-dotenv==1.0.1
 
-# Image processing and embedding
-torch==2.5.1
-torchvision==0.20.1
-sentence-transformers==3.3.1
-Pillow==11.0.0
-numpy==1.26.4
-
 # Vector database
 qdrant-client==1.12.1
+numpy==1.26.4
 
 # HTTP client
 httpx==0.28.1
@@ -31,9 +25,6 @@ arq==0.26.1
 
 # Scheduler (safety nets)
 apscheduler>=3.10.0
-
-# Image diversity filter
-opencv-python-headless>=4.8.0
 
 # Async utilities
 aiofiles==24.1.0

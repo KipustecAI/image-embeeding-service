@@ -1,4 +1,8 @@
-"""Image Embedding Service — event-driven FastAPI application."""
+"""Image Embedding Backend — pipeline orchestration, storage, and API.
+
+Consumes pre-computed vectors from the GPU compute service via Redis Streams.
+No CLIP model, no GPU dependency.
+"""
 
 import asyncio
 import logging
@@ -33,13 +37,13 @@ from src.services.safety_nets import (
     search_safety_net,
     set_arq_pool,
 )
-from src.streams.evidence_consumer import (
-    create_evidence_embed_consumer,
-    set_event_loop,
+from src.streams.embedding_results_consumer import (
+    create_embedding_results_consumer,
+    set_results_event_loop,
 )
-from src.streams.search_consumer import (
-    create_evidence_search_consumer,
-    set_search_event_loop,
+from src.streams.search_results_consumer import (
+    create_search_results_consumer,
+    set_search_results_event_loop,
 )
 from src.workers.main import get_redis_settings
 
@@ -127,17 +131,17 @@ async def lifespan(app: FastAPI):
     await search_trigger.start()
     logger.info("Batch triggers started")
 
-    # 5. Stream Consumers
+    # 5. Stream Consumers (consume output from GPU compute service)
     loop = asyncio.get_running_loop()
-    set_event_loop(loop)
-    set_search_event_loop(loop)
+    set_results_event_loop(loop)
+    set_search_results_event_loop(loop)
 
-    embed_consumer = create_evidence_embed_consumer()
+    embed_consumer = create_embedding_results_consumer()
     embed_consumer.start()
 
-    search_consumer = create_evidence_search_consumer()
+    search_consumer = create_search_results_consumer()
     search_consumer.start()
-    logger.info("Stream consumers started")
+    logger.info("Stream consumers started (embeddings:results + search:results)")
 
     logger.info("Image Embedding Service started successfully")
 

@@ -1,15 +1,14 @@
-"""Two-phase evidence embedding worker.
+"""Embedding storage worker — receives pre-computed vectors, stores in Qdrant + DB.
 
-Phase 1: Parallel image download + CLIP inference (asyncio.gather with semaphore)
-Phase 2: Bulk Qdrant upsert + bulk DB commit (N calls → 1 each)
+No CLIP model. No image downloading. Just storage.
 """
 
-import asyncio
 import logging
 from datetime import datetime
 from typing import Dict, List
 from uuid import UUID, uuid4
 
+import numpy as np
 from sqlalchemy import update
 
 from ..db.models.constants import EmbeddingRequestStatus
@@ -18,92 +17,104 @@ from ..db.models.evidence_embedding import EvidenceEmbeddingRecord
 from ..domain.entities import ImageEmbedding
 from ..infrastructure.config import get_settings
 from ..infrastructure.database import get_session
-from ..infrastructure.embedding.clip_embedder import CLIPEmbedder
 from ..infrastructure.vector_db.qdrant_repository import QdrantVectorRepository
+from ..streams.embedding_results_consumer import get_pending_vectors
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-# Module-level singletons (initialized on worker startup)
-_embedder: CLIPEmbedder = None
+# Module-level singleton (initialized on worker startup)
 _vector_repo: QdrantVectorRepository = None
 
 
 async def initialize_worker():
-    """Called on ARQ worker startup to pre-load CLIP model and Qdrant client."""
-    global _embedder, _vector_repo
-
-    _embedder = CLIPEmbedder(settings)
-    await _embedder.initialize()
-
+    """Called on ARQ worker startup — initialize Qdrant client."""
+    global _vector_repo
     _vector_repo = QdrantVectorRepository(settings)
     await _vector_repo.initialize()
-
-    logger.info("Embedding worker initialized (CLIP + Qdrant ready)")
+    logger.info("Storage worker initialized (Qdrant ready)")
 
 
 async def cleanup_worker():
-    """Called on ARQ worker shutdown."""
-    global _embedder
-    if _embedder:
-        await _embedder.cleanup()
-    logger.info("Embedding worker cleaned up")
+    logger.info("Storage worker cleaned up")
 
 
-class EmbeddingExtractionWorker:
+class EmbeddingStorageWorker:
+    """Stores pre-computed vectors in Qdrant + DB records."""
+
     def __init__(self):
-        self.embedder = _embedder
         self.vector_repo = _vector_repo
 
     async def process_batch(self, request_ids: List[str]) -> Dict:
-        """Process a batch of embedding requests using two-phase approach."""
-
-        # ── Phase 1: Parallel extraction ──
-        semaphore = asyncio.Semaphore(settings.clip_batch_size)
-
-        async def extract_with_limit(request_id: str):
-            async with semaphore:
-                return await self._extract_one(request_id)
-
-        results = await asyncio.gather(
-            *[extract_with_limit(rid) for rid in request_ids],
-            return_exceptions=True,
-        )
-
-        # Collect successes and failures
         all_embeddings: List[ImageEmbedding] = []
         all_db_records: List[EvidenceEmbeddingRecord] = []
         succeeded_ids: List[str] = []
         failed: List[Dict] = []
 
-        for rid, result in zip(request_ids, results):
-            if isinstance(result, Exception):
-                failed.append({"id": rid, "error": str(result)})
-                continue
-            if result.get("failed"):
-                failed.append({"id": rid, "error": result.get("error", "unknown")})
-                continue
+        for rid in request_ids:
+            try:
+                # Get the request to find the evidence_id
+                async with get_session() as session:
+                    request = await session.get(EmbeddingRequest, UUID(rid))
+                    if not request:
+                        failed.append({"id": rid, "error": "Request not found"})
+                        continue
+                    evidence_id = request.evidence_id
+                    camera_id = request.camera_id
 
-            all_embeddings.extend(result["embeddings"])
-            all_db_records.extend(result["db_records"])
-            succeeded_ids.append(rid)
+                # Get cached vectors from the consumer
+                vectors_data = get_pending_vectors(evidence_id)
+                if not vectors_data:
+                    failed.append({"id": rid, "error": "No cached vectors found"})
+                    continue
 
-        # ── Phase 2: Bulk storage ──
+                for emb in vectors_data["embeddings"]:
+                    point_id = str(uuid4())
+                    vector = np.array(emb["vector"], dtype=np.float32)
 
-        # 2a. Single Qdrant upsert
+                    embedding = ImageEmbedding.from_evidence(
+                        evidence_id=evidence_id,
+                        vector=vector,
+                        image_url=emb["image_url"],
+                        camera_id=camera_id,
+                        additional_metadata={
+                            "image_index": emb["image_index"],
+                            "total_images": emb["total_images"],
+                        },
+                    )
+                    embedding.id = point_id
+                    all_embeddings.append(embedding)
+
+                    all_db_records.append(
+                        EvidenceEmbeddingRecord(
+                            request_id=UUID(rid),
+                            qdrant_point_id=point_id,
+                            image_index=emb["image_index"],
+                            image_url=emb["image_url"],
+                            json_data=embedding.metadata,
+                        )
+                    )
+
+                succeeded_ids.append(rid)
+
+            except Exception as e:
+                failed.append({"id": rid, "error": str(e)})
+                logger.error(f"Failed to prepare vectors for {rid}: {e}")
+
+        # Bulk Qdrant upsert
         if all_embeddings:
             await self.vector_repo.store_embeddings_batch(all_embeddings)
 
-        # 2b. Single DB commit for embedding records
+        # Bulk DB commit
         if all_db_records:
             async with get_session() as session:
                 session.add_all(all_db_records)
 
-        # 2c. Update succeeded requests → EMBEDDED
+        # Update statuses
         if succeeded_ids:
             async with get_session() as session:
                 for rid in succeeded_ids:
-                    stmt = (
+                    await session.execute(
                         update(EmbeddingRequest)
                         .where(EmbeddingRequest.id == UUID(rid))
                         .values(
@@ -111,13 +122,11 @@ class EmbeddingExtractionWorker:
                             processing_completed_at=datetime.utcnow(),
                         )
                     )
-                    await session.execute(stmt)
 
-        # 2d. Update failed requests → ERROR
         if failed:
             async with get_session() as session:
                 for item in failed:
-                    stmt = (
+                    await session.execute(
                         update(EmbeddingRequest)
                         .where(EmbeddingRequest.id == UUID(item["id"]))
                         .values(
@@ -126,11 +135,10 @@ class EmbeddingExtractionWorker:
                             processing_completed_at=datetime.utcnow(),
                         )
                     )
-                    await session.execute(stmt)
 
         logger.info(
-            f"Embedding batch done: {len(succeeded_ids)} succeeded, {len(failed)} failed, "
-            f"{len(all_embeddings)} vectors stored"
+            f"Storage batch: {len(succeeded_ids)} stored, {len(failed)} failed, "
+            f"{len(all_embeddings)} vectors in Qdrant"
         )
 
         return {
@@ -140,66 +148,8 @@ class EmbeddingExtractionWorker:
             "vectors_stored": len(all_embeddings),
         }
 
-    async def _extract_one(self, request_id: str) -> Dict:
-        """Phase 1: extract embeddings for one request (parallel-safe, no storage)."""
-        result = {"embeddings": [], "db_records": [], "failed": False, "error": None}
-
-        async with get_session() as session:
-            request = await session.get(EmbeddingRequest, UUID(request_id))
-            if not request:
-                result["failed"] = True
-                result["error"] = "Request not found"
-                return result
-
-            image_urls = request.image_urls or []
-            evidence_id = request.evidence_id
-            camera_id = request.camera_id
-
-        for idx, image_url in enumerate(image_urls):
-            try:
-                vector = await self.embedder.generate_embedding(image_url)
-                if vector is None:
-                    logger.warning(f"CLIP returned None for {image_url}")
-                    continue
-
-                point_id = str(uuid4())
-
-                embedding = ImageEmbedding.from_evidence(
-                    evidence_id=evidence_id,
-                    vector=vector,
-                    image_url=image_url,
-                    camera_id=camera_id,
-                    additional_metadata={
-                        "image_index": idx,
-                        "total_images": len(image_urls),
-                    },
-                )
-                embedding.id = point_id
-                result["embeddings"].append(embedding)
-
-                result["db_records"].append(
-                    EvidenceEmbeddingRecord(
-                        request_id=UUID(request_id),
-                        qdrant_point_id=point_id,
-                        image_index=idx,
-                        image_url=image_url,
-                        json_data=embedding.metadata,
-                    )
-                )
-
-            except Exception as e:
-                logger.error(f"Failed to embed image {idx} for request {request_id}: {e}")
-
-        if not result["embeddings"]:
-            result["failed"] = True
-            result["error"] = "No images could be embedded"
-
-        return result
-
-
-# ── ARQ task function ──
 
 async def process_evidence_embeddings_batch(ctx: Dict, request_ids: List[str]) -> Dict:
-    """ARQ-registered task for batch embedding extraction."""
-    worker = EmbeddingExtractionWorker()
+    """ARQ-registered task for batch embedding storage."""
+    worker = EmbeddingStorageWorker()
     return await worker.process_batch(request_ids)

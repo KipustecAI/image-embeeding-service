@@ -1,9 +1,8 @@
-"""ARQ worker settings and lifecycle."""
+"""ARQ worker settings — storage workers only, no CLIP."""
 
 import logging
 from typing import Any, Dict
 
-from arq import cron
 from arq.connections import RedisSettings
 
 from ..infrastructure.config import get_settings
@@ -31,21 +30,18 @@ def get_redis_settings() -> RedisSettings:
 
 
 async def startup(ctx: Dict[str, Any]) -> None:
-    """Pre-load CLIP model and Qdrant client on worker startup."""
+    """Initialize Qdrant client on worker startup. No CLIP model needed."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
     await initialize_worker()
-    logger.info(
-        f"ARQ Worker ready | model={settings.clip_model_name} "
-        f"device={settings.clip_device} vector_size={settings.qdrant_vector_size}"
-    )
+    logger.info("ARQ Storage Worker ready (Qdrant connected, no GPU)")
 
 
 async def shutdown(ctx: Dict[str, Any]) -> None:
     await cleanup_worker()
-    logger.info("ARQ Worker shut down")
+    logger.info("ARQ Storage Worker shut down")
 
 
 class WorkerSettings:
