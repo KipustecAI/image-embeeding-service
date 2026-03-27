@@ -1,7 +1,7 @@
 """Image Embedding Backend — pipeline orchestration, storage, and API.
 
 Consumes pre-computed vectors from the GPU compute service via Redis Streams.
-No CLIP model, no GPU dependency.
+Stores directly in Qdrant + PostgreSQL — no ARQ queue for the happy path.
 """
 
 import asyncio
@@ -17,7 +17,6 @@ from typing import List, Optional
 import uvicorn
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from arq import create_pool
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
@@ -26,26 +25,23 @@ from src.api.dependencies import verify_api_key
 from src.db.repositories import EmbeddingRequestRepository, SearchRequestRepository
 from src.infrastructure.config import get_settings
 from src.infrastructure.database import engine, get_session
-from src.services.batch_trigger import create_batch_trigger, get_batch_trigger
+from src.infrastructure.vector_db.qdrant_repository import QdrantVectorRepository
+from src.services.batch_trigger import get_batch_trigger
 from src.services.safety_nets import (
     cleanup_old_requests,
-    dispatch_embedding_batch,
-    dispatch_search_batch,
-    embedding_safety_net,
     recover_stale_working,
     recalculate_searches,
-    search_safety_net,
-    set_arq_pool,
 )
 from src.streams.embedding_results_consumer import (
     create_embedding_results_consumer,
     set_results_event_loop,
+    set_vector_repo,
 )
 from src.streams.search_results_consumer import (
     create_search_results_consumer,
     set_search_results_event_loop,
+    set_search_vector_repo,
 )
-from src.workers.main import get_redis_settings
 
 logging.basicConfig(
     level=logging.INFO,
@@ -56,42 +52,32 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 # Global references
-arq_pool = None
 scheduler = None
 embed_consumer = None
 search_consumer = None
+vector_repo = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global arq_pool, scheduler, embed_consumer, search_consumer
+    global scheduler, embed_consumer, search_consumer, vector_repo
 
-    logger.info("Starting Image Embedding Service...")
+    logger.info("Starting Image Embedding Backend...")
 
     # 1. Verify database connection
     async with engine.connect() as conn:
         await conn.execute(text("SELECT 1"))
     logger.info("PostgreSQL connected")
 
-    # 2. Create ARQ pool
-    arq_pool = await create_pool(get_redis_settings())
-    set_arq_pool(arq_pool)
-    logger.info("ARQ pool created")
+    # 2. Initialize Qdrant (used directly by consumers, no ARQ needed)
+    vector_repo = QdrantVectorRepository(settings)
+    await vector_repo.initialize()
+    set_vector_repo(vector_repo)
+    set_search_vector_repo(vector_repo)
+    logger.info("Qdrant connected")
 
     # 3. APScheduler — safety nets + periodic tasks
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(
-        embedding_safety_net,
-        IntervalTrigger(seconds=60),
-        id="embedding_safety_net",
-        misfire_grace_time=30,
-    )
-    scheduler.add_job(
-        search_safety_net,
-        IntervalTrigger(seconds=120),
-        id="search_safety_net",
-        misfire_grace_time=60,
-    )
     scheduler.add_job(
         recover_stale_working,
         IntervalTrigger(minutes=5),
@@ -111,27 +97,9 @@ async def lifespan(app: FastAPI):
         misfire_grace_time=600,
     )
     scheduler.start()
-    logger.info("Scheduler started (safety nets + periodic tasks)")
+    logger.info("Scheduler started (stale recovery, recalculation, cleanup)")
 
-    # 4. Batch Triggers
-    embedding_trigger = create_batch_trigger(
-        name="embedding",
-        batch_size=settings.batch_trigger_size,
-        max_wait_seconds=settings.batch_trigger_max_wait,
-        process_callback=dispatch_embedding_batch,
-    )
-    await embedding_trigger.start()
-
-    search_trigger = create_batch_trigger(
-        name="search",
-        batch_size=settings.batch_trigger_search_size,
-        max_wait_seconds=settings.batch_trigger_search_wait,
-        process_callback=dispatch_search_batch,
-    )
-    await search_trigger.start()
-    logger.info("Batch triggers started")
-
-    # 5. Stream Consumers (consume output from GPU compute service)
+    # 4. Stream Consumers (consume output from GPU compute service)
     loop = asyncio.get_running_loop()
     set_results_event_loop(loop)
     set_search_results_event_loop(loop)
@@ -143,7 +111,7 @@ async def lifespan(app: FastAPI):
     search_consumer.start()
     logger.info("Stream consumers started (embeddings:results + search:results)")
 
-    logger.info("Image Embedding Service started successfully")
+    logger.info("Image Embedding Backend ready")
 
     yield
 
@@ -155,16 +123,8 @@ async def lifespan(app: FastAPI):
     if search_consumer:
         search_consumer.stop()
 
-    for name in ("embedding", "search"):
-        trigger = get_batch_trigger(name)
-        if trigger:
-            await trigger.stop()
-
     if scheduler and scheduler.running:
         scheduler.shutdown(wait=False)
-
-    if arq_pool:
-        await arq_pool.close()
 
     await engine.dispose()
     logger.info("Shutdown complete")
@@ -173,9 +133,9 @@ async def lifespan(app: FastAPI):
 # ── FastAPI App ──
 
 app = FastAPI(
-    title="Image Embedding Service",
-    description="Event-driven microservice for CLIP image embedding and similarity search",
-    version="2.0.0",
+    title="Image Embedding Backend",
+    description="Event-driven backend for CLIP image embedding storage and similarity search",
+    version="2.1.0",
     lifespan=lifespan,
 )
 
@@ -186,8 +146,8 @@ app = FastAPI(
 @app.get("/")
 async def root():
     return {
-        "service": "Image Embedding Service",
-        "version": "2.0.0",
+        "service": "Image Embedding Backend",
+        "version": "2.1.0",
         "status": "running",
         "environment": settings.environment,
     }
@@ -197,6 +157,7 @@ async def root():
 async def health_check():
     components = {
         "database": False,
+        "qdrant": False,
         "scheduler": scheduler.running if scheduler else False,
     }
 
@@ -207,16 +168,16 @@ async def health_check():
     except Exception:
         pass
 
-    embed_trigger = get_batch_trigger("embedding")
-    search_trigger = get_batch_trigger("search")
+    try:
+        if vector_repo:
+            stats = await vector_repo.get_collection_stats()
+            components["qdrant"] = bool(stats)
+    except Exception:
+        pass
 
     return {
         "status": "healthy" if all(components.values()) else "degraded",
         "components": components,
-        "triggers": {
-            "embedding": embed_trigger.health() if embed_trigger else None,
-            "search": search_trigger.health() if search_trigger else None,
-        },
         "consumers": {
             "embed": embed_consumer.health() if embed_consumer else None,
             "search": search_consumer.health() if search_consumer else None,
@@ -232,17 +193,17 @@ async def get_statistics():
         embed_counts = await embed_repo.count_by_status()
         search_counts = await search_repo.count_by_status()
 
+    qdrant_stats = {}
+    if vector_repo:
+        qdrant_stats = await vector_repo.get_collection_stats()
+
     return {
-        "service": "Image Embedding Service",
+        "service": "Image Embedding Backend",
         "pipeline": {
             "embedding_requests": embed_counts,
             "search_requests": search_counts,
         },
-        "configuration": {
-            "model": settings.clip_model_name,
-            "device": settings.clip_device,
-            "vector_size": settings.qdrant_vector_size,
-        },
+        "qdrant": qdrant_stats,
     }
 
 
@@ -251,46 +212,23 @@ async def get_statistics():
 
 @app.get("/api/v1/pipeline/status")
 async def pipeline_status():
-    """Combined pipeline status: DB counts + trigger metrics + consumer health."""
+    """Combined pipeline status: DB counts + consumer health."""
     async with get_session() as session:
         embed_repo = EmbeddingRequestRepository(session)
         search_repo = SearchRequestRepository(session)
         embed_counts = await embed_repo.count_by_status()
         search_counts = await search_repo.count_by_status()
 
-    embed_trigger = get_batch_trigger("embedding")
-    search_trigger = get_batch_trigger("search")
-
     return {
         "status_counts": {
             "embedding": embed_counts,
             "search": search_counts,
-        },
-        "triggers": {
-            "embedding": embed_trigger.health() if embed_trigger else None,
-            "search": search_trigger.health() if search_trigger else None,
         },
         "consumers": {
             "embed": embed_consumer.health() if embed_consumer else None,
             "search": search_consumer.health() if search_consumer else None,
         },
     }
-
-
-# ── Internal Trigger (cross-process notification) ──
-
-
-@app.post("/api/v1/internal/trigger/{trigger_name}")
-async def notify_trigger(trigger_name: str, count: int = 1):
-    """Called by ARQ worker (separate process) to notify in-memory triggers."""
-    trigger = get_batch_trigger(trigger_name)
-    if not trigger:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Trigger '{trigger_name}' not found",
-        )
-    await trigger.notify(count=count)
-    return {"notified": True, "trigger": trigger_name, "count": count}
 
 
 # ── Recalculation ──
@@ -315,10 +253,6 @@ async def trigger_recalculation(
         for s in searches:
             s.status = 1  # TO_WORK
             s.worker_id = None
-
-    trigger = get_batch_trigger("search")
-    if trigger:
-        await trigger.notify(count=len(searches))
 
     return {
         "success": True,

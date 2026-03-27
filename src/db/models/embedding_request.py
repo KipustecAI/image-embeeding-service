@@ -18,7 +18,6 @@ class EmbeddingRequest(Base):
     camera_id = Column(String(255), nullable=False, index=True)
     status = Column(Integer, nullable=False, default=1, index=True)
     image_urls = Column(JSONB, default=[])
-    vector_data = Column(JSONB)  # Pre-computed embeddings from GPU compute service
 
     # Worker tracking
     worker_id = Column(String(100))

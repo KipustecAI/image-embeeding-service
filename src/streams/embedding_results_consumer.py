@@ -1,16 +1,22 @@
 """Consumer for embeddings:results stream — receives pre-computed vectors from GPU service.
 
-Creates DB rows with vector_data and triggers Qdrant storage via BatchTrigger.
+Stores vectors directly in Qdrant + DB in the consumer (no ARQ queue needed).
+The operation is fast (~70ms) so there's no benefit to deferring it.
 """
 
 import asyncio
 import logging
-from typing import Dict, Optional
+from datetime import datetime
+from typing import Dict, List, Optional
+from uuid import uuid4
 
+import numpy as np
 from sqlalchemy import update
 
 from ..db.models.constants import EmbeddingRequestStatus
 from ..db.models.embedding_request import EmbeddingRequest
+from ..db.models.evidence_embedding import EvidenceEmbeddingRecord
+from ..domain.entities import ImageEmbedding
 from ..infrastructure.config import get_settings
 from ..infrastructure.database import get_session
 from ..db.repositories import EmbeddingRequestRepository
@@ -20,11 +26,17 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 _event_loop: Optional[asyncio.AbstractEventLoop] = None
+_vector_repo = None  # QdrantVectorRepository, set at startup
 
 
 def set_results_event_loop(loop: asyncio.AbstractEventLoop):
     global _event_loop
     _event_loop = loop
+
+
+def set_vector_repo(repo):
+    global _vector_repo
+    _vector_repo = repo
 
 
 def create_embedding_results_consumer() -> StreamConsumer:
@@ -64,47 +76,95 @@ def _handle_compute_error(event_type: str, payload: Dict, message_id: str):
 
 
 async def _process_embeddings_result(payload: Dict, message_id: str):
-    """Receive pre-computed vectors → store in DB row → notify trigger."""
+    """Receive pre-computed vectors → store in Qdrant + DB directly (no ARQ queue)."""
     evidence_id = payload.get("evidence_id", "")
     camera_id = payload.get("camera_id", "")
-    embeddings = payload.get("embeddings", [])
+    embeddings_data = payload.get("embeddings", [])
 
-    if not evidence_id or not embeddings:
+    if not evidence_id or not embeddings_data:
         logger.warning(f"Skipping result with missing data: evidence_id={evidence_id}")
         return
 
-    image_urls = [e["image_url"] for e in embeddings]
-
+    # Dedup check
     async with get_session() as session:
         repo = EmbeddingRequestRepository(session)
-
         if await repo.check_duplicate(evidence_id):
             logger.info(f"Skipping duplicate evidence {evidence_id}")
             return
 
-        # Create request with vector_data stored in DB (not in-memory cache)
-        request = await repo.create_request(
-            evidence_id=evidence_id,
-            camera_id=camera_id,
-            image_urls=image_urls,
-            stream_msg_id=message_id,
+    try:
+        # 1. Build Qdrant embeddings + DB records
+        qdrant_embeddings: List[ImageEmbedding] = []
+        db_records: List[EvidenceEmbeddingRecord] = []
+
+        for emb in embeddings_data:
+            point_id = str(uuid4())
+            vector = np.array(emb["vector"], dtype=np.float32)
+
+            embedding = ImageEmbedding.from_evidence(
+                evidence_id=evidence_id,
+                vector=vector,
+                image_url=emb["image_url"],
+                camera_id=camera_id,
+                additional_metadata={
+                    "image_index": emb["image_index"],
+                    "total_images": emb["total_images"],
+                },
+            )
+            embedding.id = point_id
+            qdrant_embeddings.append(embedding)
+
+            db_records.append(
+                EvidenceEmbeddingRecord(
+                    qdrant_point_id=point_id,
+                    image_index=emb["image_index"],
+                    image_url=emb["image_url"],
+                    json_data=embedding.metadata,
+                )
+            )
+
+        # 2. Store in Qdrant (single bulk upsert)
+        if _vector_repo and qdrant_embeddings:
+            await _vector_repo.store_embeddings_batch(qdrant_embeddings)
+
+        # 3. Create DB request + embedding records in one transaction
+        async with get_session() as session:
+            repo = EmbeddingRequestRepository(session)
+            request = await repo.create_request(
+                evidence_id=evidence_id,
+                camera_id=camera_id,
+                image_urls=[e["image_url"] for e in embeddings_data],
+                stream_msg_id=message_id,
+            )
+
+            # Link DB records to the request
+            for record in db_records:
+                record.request_id = request.id
+            session.add_all(db_records)
+
+            # Mark as EMBEDDED directly
+            request.status = EmbeddingRequestStatus.EMBEDDED
+            request.processing_completed_at = datetime.utcnow()
+
+        logger.info(
+            f"Stored {len(qdrant_embeddings)} vectors for evidence {evidence_id} "
+            f"(input={payload.get('input_count')}, filtered={payload.get('filtered_count')})"
         )
 
-        # Store the pre-computed vectors in the DB row so the ARQ worker can read them
-        request.vector_data = embeddings
-        await session.commit()
-
-    # Notify BatchTrigger
-    from ..services.batch_trigger import get_batch_trigger
-
-    trigger = get_batch_trigger("embedding")
-    if trigger:
-        await trigger.notify(count=1)
-
-    logger.info(
-        f"Received {len(embeddings)} embeddings for evidence {evidence_id} "
-        f"(input={payload.get('input_count')}, filtered={payload.get('filtered_count')})"
-    )
+    except Exception as e:
+        logger.error(f"Failed to store embeddings for {evidence_id}: {e}", exc_info=True)
+        # Create error row for tracking
+        async with get_session() as session:
+            repo = EmbeddingRequestRepository(session)
+            if not await repo.check_duplicate(evidence_id):
+                request = await repo.create_request(
+                    evidence_id=evidence_id,
+                    camera_id=camera_id,
+                    image_urls=[],
+                    stream_msg_id=message_id,
+                )
+                request.status = EmbeddingRequestStatus.ERROR
+                request.error_message = str(e)[:500]
 
 
 async def _process_compute_error(payload: Dict):
@@ -124,15 +184,7 @@ async def _process_compute_error(payload: Dict):
                 camera_id="unknown",
                 image_urls=[],
             )
-
-        stmt = (
-            update(EmbeddingRequest)
-            .where(EmbeddingRequest.evidence_id == entity_id)
-            .values(
-                status=EmbeddingRequestStatus.ERROR,
-                error_message=f"Compute error: {error}",
-            )
-        )
-        await session.execute(stmt)
+            request.status = EmbeddingRequestStatus.ERROR
+            request.error_message = f"Compute error: {error}"
 
     logger.error(f"Compute error for evidence {entity_id}: {error}")

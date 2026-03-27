@@ -1,15 +1,17 @@
 """Consumer for search:results stream — receives pre-computed query vectors from GPU service.
 
-Stores vector in DB and triggers Qdrant search via BatchTrigger.
+Executes Qdrant search + stores results directly in the consumer (no ARQ queue needed).
 """
 
 import asyncio
 import logging
+from datetime import datetime
 from typing import Dict, Optional
 
+import numpy as np
 from sqlalchemy import update
 
-from ..db.models.constants import SearchRequestStatus
+from ..db.models.constants import SearchRequestStatus, SimilarityStatus
 from ..db.models.search_request import SearchRequest
 from ..infrastructure.config import get_settings
 from ..infrastructure.database import get_session
@@ -20,11 +22,17 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 _event_loop: Optional[asyncio.AbstractEventLoop] = None
+_vector_repo = None  # Set at startup
 
 
 def set_search_results_event_loop(loop: asyncio.AbstractEventLoop):
     global _event_loop
     _event_loop = loop
+
+
+def set_search_vector_repo(repo):
+    global _vector_repo
+    _vector_repo = repo
 
 
 def create_search_results_consumer() -> StreamConsumer:
@@ -63,7 +71,7 @@ def _handle_compute_error(event_type: str, payload: Dict, message_id: str):
 
 
 async def _process_search_result(payload: Dict, message_id: str):
-    """Receive pre-computed query vector → store in DB → notify trigger."""
+    """Receive query vector → search Qdrant → store results directly (no ARQ queue)."""
     search_id = payload.get("search_id", "")
     user_id = payload.get("user_id", "")
     vector = payload.get("vector")
@@ -76,39 +84,73 @@ async def _process_search_result(payload: Dict, message_id: str):
     max_results = payload.get("max_results", 50)
     search_metadata = payload.get("metadata")
 
+    # Dedup
     async with get_session() as session:
         repo = SearchRequestRepository(session)
-
         if await repo.check_duplicate(search_id):
             logger.info(f"Skipping duplicate search {search_id}")
             return
 
-        request = await repo.create_request(
-            search_id=search_id,
-            user_id=user_id,
-            image_url="(computed by GPU service)",
-            threshold=threshold,
-            max_results=max_results,
-            metadata=search_metadata,
-            stream_msg_id=message_id,
+    try:
+        query_vector = np.array(vector, dtype=np.float32)
+
+        # Build filter conditions
+        filter_conditions = None
+        if search_metadata:
+            filter_conditions = {}
+            if "camera_id" in search_metadata:
+                filter_conditions["camera_id"] = search_metadata["camera_id"]
+            if "object_type" in search_metadata:
+                filter_conditions["object_type"] = search_metadata["object_type"]
+
+        # Search Qdrant directly
+        matches = []
+        if _vector_repo:
+            matches = await _vector_repo.search_similar(
+                query_vector=query_vector,
+                limit=max_results,
+                threshold=threshold,
+                filter_conditions=filter_conditions,
+            )
+
+        total_matches = len(matches)
+        similarity_status = (
+            SimilarityStatus.MATCHES_FOUND if total_matches > 0
+            else SimilarityStatus.NO_MATCHES
         )
 
-        # Store vector in DB so the ARQ worker can read it
-        request.vector_data = {
-            "vector": vector,
-            "threshold": threshold,
-            "max_results": max_results,
-            "metadata": search_metadata,
-        }
-        await session.commit()
+        # Create DB row with results
+        async with get_session() as session:
+            repo = SearchRequestRepository(session)
+            request = await repo.create_request(
+                search_id=search_id,
+                user_id=user_id,
+                image_url="(computed by GPU service)",
+                threshold=threshold,
+                max_results=max_results,
+                metadata=search_metadata,
+                stream_msg_id=message_id,
+            )
+            request.status = SearchRequestStatus.COMPLETED
+            request.similarity_status = similarity_status
+            request.total_matches = total_matches
+            request.processing_completed_at = datetime.utcnow()
 
-    from ..services.batch_trigger import get_batch_trigger
+        logger.info(f"Search {search_id}: {total_matches} matches (threshold={threshold})")
 
-    trigger = get_batch_trigger("search")
-    if trigger:
-        await trigger.notify(count=1)
-
-    logger.info(f"Received query vector for search {search_id}")
+    except Exception as e:
+        logger.error(f"Failed to process search {search_id}: {e}", exc_info=True)
+        async with get_session() as session:
+            repo = SearchRequestRepository(session)
+            if not await repo.check_duplicate(search_id):
+                request = await repo.create_request(
+                    search_id=search_id,
+                    user_id=user_id,
+                    image_url="(failed)",
+                    stream_msg_id=message_id,
+                )
+                request.status = SearchRequestStatus.ERROR
+                request.error_message = str(e)[:500]
 
 
 async def _process_compute_error(payload: Dict):
@@ -122,20 +164,12 @@ async def _process_compute_error(payload: Dict):
     async with get_session() as session:
         repo = SearchRequestRepository(session)
         if not await repo.check_duplicate(entity_id):
-            await repo.create_request(
+            request = await repo.create_request(
                 search_id=entity_id,
                 user_id="unknown",
                 image_url="(failed)",
             )
-
-        stmt = (
-            update(SearchRequest)
-            .where(SearchRequest.search_id == entity_id)
-            .values(
-                status=SearchRequestStatus.ERROR,
-                error_message=f"Compute error: {error}",
-            )
-        )
-        await session.execute(stmt)
+            request.status = SearchRequestStatus.ERROR
+            request.error_message = f"Compute error: {error}"
 
     logger.error(f"Compute error for search {entity_id}: {error}")
