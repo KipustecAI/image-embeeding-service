@@ -56,6 +56,7 @@ class WorkerSettings:
     keep_result = 3600
     max_tries = 3
     retry_delay = 5
+    poll_delay = 0.5          # Check for new jobs every 0.5s (was effectively 30s)
     health_check_interval = 30
 
     on_startup = startup
