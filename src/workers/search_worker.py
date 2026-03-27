@@ -16,8 +16,6 @@ from ..db.models.search_request import SearchRequest
 from ..infrastructure.config import get_settings
 from ..infrastructure.database import get_session
 from ..infrastructure.vector_db.qdrant_repository import QdrantVectorRepository
-from ..streams.search_results_consumer import get_pending_search_vector
-
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
@@ -44,8 +42,8 @@ class SearchExecutionWorker:
                         continue
                     search_id = request.search_id
 
-                # Get cached vector from consumer
-                vector_data = get_pending_search_vector(search_id)
+                # Get pre-computed vector from DB
+                vector_data = request.vector_data
                 if not vector_data:
                     await self._mark_error(rid, "No cached query vector found")
                     failed += 1

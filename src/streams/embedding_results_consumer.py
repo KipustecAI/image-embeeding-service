@@ -1,13 +1,16 @@
 """Consumer for embeddings:results stream — receives pre-computed vectors from GPU service.
 
-Creates DB rows and triggers Qdrant storage via BatchTrigger.
+Creates DB rows with vector_data and triggers Qdrant storage via BatchTrigger.
 """
 
 import asyncio
-import json
 import logging
 from typing import Dict, Optional
 
+from sqlalchemy import update
+
+from ..db.models.constants import EmbeddingRequestStatus
+from ..db.models.embedding_request import EmbeddingRequest
 from ..infrastructure.config import get_settings
 from ..infrastructure.database import get_session
 from ..db.repositories import EmbeddingRequestRepository
@@ -18,18 +21,10 @@ settings = get_settings()
 
 _event_loop: Optional[asyncio.AbstractEventLoop] = None
 
-# In-memory cache: evidence_id → vector data (picked up by the storage worker)
-_pending_vectors: Dict[str, dict] = {}
-
 
 def set_results_event_loop(loop: asyncio.AbstractEventLoop):
     global _event_loop
     _event_loop = loop
-
-
-def get_pending_vectors(evidence_id: str) -> Optional[dict]:
-    """Pop cached vectors for a given evidence. Called by the storage worker."""
-    return _pending_vectors.pop(evidence_id, None)
 
 
 def create_embedding_results_consumer() -> StreamConsumer:
@@ -39,7 +34,7 @@ def create_embedding_results_consumer() -> StreamConsumer:
         group=settings.stream_backend_group,
         redis_host=settings.redis_host,
         redis_port=settings.redis_port,
-        redis_password=settings.redis_password,
+        redis_password=settings.redis_password or None,
         redis_db=settings.redis_streams_db,
         block_ms=settings.stream_consumer_block_ms,
         batch_size=settings.stream_consumer_batch_size,
@@ -53,7 +48,6 @@ def create_embedding_results_consumer() -> StreamConsumer:
 
 
 def _handle_embeddings_computed(event_type: str, payload: Dict, message_id: str):
-    """Daemon thread → asyncio bridge."""
     future = asyncio.run_coroutine_threadsafe(
         _process_embeddings_result(payload, message_id),
         _event_loop,
@@ -62,7 +56,6 @@ def _handle_embeddings_computed(event_type: str, payload: Dict, message_id: str)
 
 
 def _handle_compute_error(event_type: str, payload: Dict, message_id: str):
-    """Handle errors from compute service."""
     future = asyncio.run_coroutine_threadsafe(
         _process_compute_error(payload),
         _event_loop,
@@ -71,7 +64,7 @@ def _handle_compute_error(event_type: str, payload: Dict, message_id: str):
 
 
 async def _process_embeddings_result(payload: Dict, message_id: str):
-    """Receive pre-computed vectors → create DB row → cache vectors → notify trigger."""
+    """Receive pre-computed vectors → store in DB row → notify trigger."""
     evidence_id = payload.get("evidence_id", "")
     camera_id = payload.get("camera_id", "")
     embeddings = payload.get("embeddings", [])
@@ -89,24 +82,21 @@ async def _process_embeddings_result(payload: Dict, message_id: str):
             logger.info(f"Skipping duplicate evidence {evidence_id}")
             return
 
+        # Create request with vector_data stored in DB (not in-memory cache)
         request = await repo.create_request(
             evidence_id=evidence_id,
             camera_id=camera_id,
             image_urls=image_urls,
             stream_msg_id=message_id,
         )
-        await session.commit()
 
-    # Cache vectors for the storage worker to pick up
-    _pending_vectors[evidence_id] = {
-        "request_id": str(request.id),
-        "evidence_id": evidence_id,
-        "camera_id": camera_id,
-        "embeddings": embeddings,
-    }
+        # Store the pre-computed vectors in the DB row so the ARQ worker can read them
+        request.vector_data = embeddings
+        await session.commit()
 
     # Notify BatchTrigger
     from ..services.batch_trigger import get_batch_trigger
+
     trigger = get_batch_trigger("embedding")
     if trigger:
         await trigger.notify(count=1)
@@ -126,22 +116,15 @@ async def _process_compute_error(payload: Dict):
     if entity_type != "evidence":
         return
 
-    from ..db.models.constants import EmbeddingRequestStatus
     async with get_session() as session:
         repo = EmbeddingRequestRepository(session)
         if not await repo.check_duplicate(entity_id):
-            # Create a row so the error is tracked
             request = await repo.create_request(
                 evidence_id=entity_id,
                 camera_id="unknown",
                 image_urls=[],
             )
 
-    # Mark as error
-    from sqlalchemy import update
-    from ..db.models.embedding_request import EmbeddingRequest
-    from ..db.models.constants import EmbeddingRequestStatus
-    async with get_session() as session:
         stmt = (
             update(EmbeddingRequest)
             .where(EmbeddingRequest.evidence_id == entity_id)

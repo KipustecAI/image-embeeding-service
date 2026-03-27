@@ -23,6 +23,7 @@ class SearchRequest(Base):
     threshold = Column(Float, default=0.75)
     max_results = Column(Integer, default=50)
     search_metadata = Column(JSONB)
+    vector_data = Column(JSONB)  # Pre-computed query vector from GPU compute service
 
     # Results
     total_matches = Column(Integer, default=0)

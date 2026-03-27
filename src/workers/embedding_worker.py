@@ -18,8 +18,6 @@ from ..domain.entities import ImageEmbedding
 from ..infrastructure.config import get_settings
 from ..infrastructure.database import get_session
 from ..infrastructure.vector_db.qdrant_repository import QdrantVectorRepository
-from ..streams.embedding_results_consumer import get_pending_vectors
-
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
@@ -62,13 +60,13 @@ class EmbeddingStorageWorker:
                     evidence_id = request.evidence_id
                     camera_id = request.camera_id
 
-                # Get cached vectors from the consumer
-                vectors_data = get_pending_vectors(evidence_id)
+                # Get pre-computed vectors from DB (stored by consumer)
+                vectors_data = request.vector_data
                 if not vectors_data:
                     failed.append({"id": rid, "error": "No cached vectors found"})
                     continue
 
-                for emb in vectors_data["embeddings"]:
+                for emb in vectors_data:
                     point_id = str(uuid4())
                     vector = np.array(emb["vector"], dtype=np.float32)
 

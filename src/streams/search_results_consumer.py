@@ -1,12 +1,16 @@
 """Consumer for search:results stream — receives pre-computed query vectors from GPU service.
 
-Creates DB rows and triggers Qdrant search via BatchTrigger.
+Stores vector in DB and triggers Qdrant search via BatchTrigger.
 """
 
 import asyncio
 import logging
 from typing import Dict, Optional
 
+from sqlalchemy import update
+
+from ..db.models.constants import SearchRequestStatus
+from ..db.models.search_request import SearchRequest
 from ..infrastructure.config import get_settings
 from ..infrastructure.database import get_session
 from ..db.repositories import SearchRequestRepository
@@ -17,28 +21,19 @@ settings = get_settings()
 
 _event_loop: Optional[asyncio.AbstractEventLoop] = None
 
-# In-memory cache: search_id → vector data (picked up by the search worker)
-_pending_search_vectors: Dict[str, dict] = {}
-
 
 def set_search_results_event_loop(loop: asyncio.AbstractEventLoop):
     global _event_loop
     _event_loop = loop
 
 
-def get_pending_search_vector(search_id: str) -> Optional[dict]:
-    """Pop cached search vector. Called by the search execution worker."""
-    return _pending_search_vectors.pop(search_id, None)
-
-
 def create_search_results_consumer() -> StreamConsumer:
-    """Factory: creates a consumer for search:results from the GPU service."""
     consumer = StreamConsumer(
         stream=settings.stream_search_results,
         group=settings.stream_backend_group,
         redis_host=settings.redis_host,
         redis_port=settings.redis_port,
-        redis_password=settings.redis_password,
+        redis_password=settings.redis_password or None,
         redis_db=settings.redis_streams_db,
         block_ms=settings.stream_consumer_block_ms,
         batch_size=settings.stream_consumer_batch_size,
@@ -68,7 +63,7 @@ def _handle_compute_error(event_type: str, payload: Dict, message_id: str):
 
 
 async def _process_search_result(payload: Dict, message_id: str):
-    """Receive pre-computed query vector → create DB row → cache → notify trigger."""
+    """Receive pre-computed query vector → store in DB → notify trigger."""
     search_id = payload.get("search_id", "")
     user_id = payload.get("user_id", "")
     vector = payload.get("vector")
@@ -97,20 +92,18 @@ async def _process_search_result(payload: Dict, message_id: str):
             metadata=search_metadata,
             stream_msg_id=message_id,
         )
+
+        # Store vector in DB so the ARQ worker can read it
+        request.vector_data = {
+            "vector": vector,
+            "threshold": threshold,
+            "max_results": max_results,
+            "metadata": search_metadata,
+        }
         await session.commit()
 
-    # Cache vector for the search execution worker
-    _pending_search_vectors[search_id] = {
-        "request_id": str(request.id),
-        "search_id": search_id,
-        "user_id": user_id,
-        "vector": vector,
-        "threshold": threshold,
-        "max_results": max_results,
-        "metadata": search_metadata,
-    }
-
     from ..services.batch_trigger import get_batch_trigger
+
     trigger = get_batch_trigger("search")
     if trigger:
         await trigger.notify(count=1)
@@ -119,17 +112,12 @@ async def _process_search_result(payload: Dict, message_id: str):
 
 
 async def _process_compute_error(payload: Dict):
-    """Mark search as ERROR when compute service fails."""
     entity_id = payload.get("entity_id", "")
     entity_type = payload.get("entity_type", "")
     error = payload.get("error", "Unknown compute error")
 
     if entity_type != "search":
         return
-
-    from sqlalchemy import update
-    from ..db.models.search_request import SearchRequest
-    from ..db.models.constants import SearchRequestStatus
 
     async with get_session() as session:
         repo = SearchRequestRepository(session)
@@ -140,7 +128,6 @@ async def _process_compute_error(payload: Dict):
                 image_url="(failed)",
             )
 
-    async with get_session() as session:
         stmt = (
             update(SearchRequest)
             .where(SearchRequest.search_id == entity_id)
