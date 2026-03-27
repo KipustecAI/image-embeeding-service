@@ -5,6 +5,7 @@ Executes Qdrant search and stores individual match results in search_matches tab
 
 import asyncio
 import logging
+import uuid as uuid_mod
 from datetime import datetime
 from typing import Dict, Optional
 
@@ -111,6 +112,15 @@ async def _process_search_result(payload: Dict, message_id: str):
             else SimilarityStatus.NO_MATCHES
         )
 
+        # Store query vector in Qdrant for future recalculation
+        query_point_id = str(uuid_mod.uuid4())
+        if _vector_repo:
+            await _vector_repo.store_query_vector(
+                point_id=query_point_id,
+                vector=query_vector.tolist(),
+                search_id=search_id,
+            )
+
         # Store everything in one transaction: request + match rows
         async with get_session() as session:
             repo = SearchRequestRepository(session)
@@ -135,6 +145,12 @@ async def _process_search_result(payload: Dict, message_id: str):
             request.similarity_status = similarity_status
             request.total_matches = total_matches
             request.processing_completed_at = datetime.utcnow()
+            request.qdrant_query_point_id = query_point_id
+
+            # Clear old matches if this is a recalculation
+            if request.matches:
+                request.matches.clear()
+                await session.flush()
 
             # Create SearchMatch rows for each result
             for match in matches:

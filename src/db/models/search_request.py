@@ -28,6 +28,7 @@ class SearchRequest(Base):
     # Results
     total_matches = Column(Integer, default=0)
     results_key = Column(String(255))
+    qdrant_query_point_id = Column(String(255), nullable=True)
 
     # Worker tracking
     worker_id = Column(String(100))

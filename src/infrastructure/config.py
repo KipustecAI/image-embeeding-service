@@ -50,12 +50,6 @@ class Settings(BaseSettings):
     stream_dead_letter_max_retries: int = Field(3, validation_alias="STREAM_DEAD_LETTER_MAX_RETRIES")
     stream_consumer_concurrency: int = Field(1, validation_alias="STREAM_CONSUMER_CONCURRENCY")
 
-    # Batch Trigger
-    batch_trigger_size: int = Field(20, validation_alias="BATCH_TRIGGER_SIZE")
-    batch_trigger_max_wait: float = Field(5.0, validation_alias="BATCH_TRIGGER_MAX_WAIT")
-    batch_trigger_search_size: int = Field(10, validation_alias="BATCH_TRIGGER_SEARCH_SIZE")
-    batch_trigger_search_wait: float = Field(3.0, validation_alias="BATCH_TRIGGER_SEARCH_WAIT")
-
     # Recalculation
     recalculation_enabled: bool = Field(True, validation_alias="RECALCULATION_ENABLED")
     recalculation_hours_old: int = Field(2, validation_alias="RECALCULATION_HOURS_OLD")
@@ -69,11 +63,6 @@ class Settings(BaseSettings):
     # Search Configuration
     default_similarity_threshold: float = Field(0.75, validation_alias="DEFAULT_SIMILARITY_THRESHOLD")
     max_search_results: int = Field(100, validation_alias="MAX_SEARCH_RESULTS")
-
-    # Worker Configuration
-    worker_concurrency: int = Field(4, validation_alias="WORKER_CONCURRENCY")
-    worker_max_retries: int = Field(3, validation_alias="WORKER_MAX_RETRIES")
-    worker_retry_delay: int = Field(60, validation_alias="WORKER_RETRY_DELAY")
 
     @field_validator("environment")
     @classmethod

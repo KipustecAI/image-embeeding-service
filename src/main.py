@@ -7,6 +7,7 @@ Stores directly in Qdrant + PostgreSQL — no ARQ queue for the happy path.
 import asyncio
 import logging
 import sys
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -28,12 +29,12 @@ from pydantic import BaseModel
 from src.infrastructure.config import get_settings
 from src.infrastructure.database import engine, get_session
 from src.infrastructure.vector_db.qdrant_repository import QdrantVectorRepository
-from src.services.batch_trigger import get_batch_trigger
 from src.streams.producer import StreamProducer
 from src.services.safety_nets import (
     cleanup_old_requests,
     recover_stale_working,
     recalculate_searches,
+    set_vector_repo as set_safety_nets_vector_repo,
 )
 from src.streams.embedding_results_consumer import (
     create_embedding_results_consumer,
@@ -78,6 +79,7 @@ async def lifespan(app: FastAPI):
     await vector_repo.initialize()
     set_vector_repo(vector_repo)
     set_search_vector_repo(vector_repo)
+    set_safety_nets_vector_repo(vector_repo)
     logger.info("Qdrant connected")
 
     # 3. Stream producer (for publishing search requests to GPU)
@@ -392,10 +394,15 @@ async def list_user_searches(
 @app.post("/api/v1/recalculate/searches")
 async def trigger_recalculation(
     limit: int = Query(20, ge=1, le=100),
-    hours_old: int = Query(2, ge=1, le=168),
+    hours_old: int = Query(2, ge=0, le=168),
     ctx: UserContext = Depends(get_user_context),
 ):
-    """Manually trigger recalculation of completed searches."""
+    """Manually trigger recalculation of completed searches using stored query vectors."""
+    from sqlalchemy import delete as sa_delete
+    from src.db.models.constants import SimilarityStatus
+    from src.db.models.search_match import SearchMatch
+    import numpy as np
+
     async with get_session() as session:
         repo = SearchRequestRepository(session)
         searches = await repo.get_for_recalculation(
@@ -403,16 +410,64 @@ async def trigger_recalculation(
         )
 
         if not searches:
-            return {"success": True, "message": "No searches eligible", "total": 0}
+            return {"success": True, "message": "No searches eligible", "total": 0, "skipped": 0}
 
+        recalculated = 0
+        skipped = 0
         for s in searches:
-            s.status = 1  # TO_WORK
-            s.worker_id = None
+            if not s.qdrant_query_point_id:
+                skipped += 1
+                continue
+
+            query_vector_list = await vector_repo.retrieve_query_vector(s.qdrant_query_point_id)
+            if query_vector_list is None:
+                skipped += 1
+                continue
+
+            filter_conditions = None
+            if s.search_metadata:
+                filter_conditions = {
+                    k: v for k, v in s.search_metadata.items()
+                    if k in ("camera_id", "object_type")
+                }
+                if not filter_conditions:
+                    filter_conditions = None
+
+            matches = await vector_repo.search_similar(
+                query_vector=np.array(query_vector_list, dtype=np.float32),
+                limit=s.max_results,
+                threshold=s.threshold,
+                filter_conditions=filter_conditions,
+            )
+
+            # Delete old matches
+            await session.execute(
+                sa_delete(SearchMatch).where(SearchMatch.search_request_id == s.id)
+            )
+
+            for match in matches:
+                session.add(SearchMatch(
+                    search_request_id=s.id,
+                    evidence_id=str(match.evidence_id),
+                    camera_id=str(match.camera_id) if match.camera_id else None,
+                    similarity_score=match.similarity_score,
+                    image_url=match.image_url,
+                    match_metadata=match.metadata,
+                ))
+
+            s.total_matches = len(matches)
+            s.similarity_status = (
+                SimilarityStatus.MATCHES_FOUND if matches
+                else SimilarityStatus.NO_MATCHES
+            )
+            s.processing_completed_at = datetime.utcnow()
+            recalculated += 1
 
     return {
         "success": True,
-        "message": f"Queued {len(searches)} searches for recalculation",
-        "total": len(searches),
+        "message": f"Recalculated {recalculated} searches ({skipped} skipped — no stored vector)",
+        "total": recalculated,
+        "skipped": skipped,
     }
 
 

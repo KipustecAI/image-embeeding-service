@@ -24,10 +24,12 @@ from ..config import Settings
 
 logger = logging.getLogger(__name__)
 
+SEARCH_QUERIES_COLLECTION = "search_queries"
+
 
 class QdrantVectorRepository(VectorRepository):
     """Qdrant vector database implementation."""
-    
+
     def __init__(self, settings: Settings):
         self.settings = settings
         self.client: Optional[QdrantClient] = None
@@ -90,7 +92,24 @@ class QdrantVectorRepository(VectorRepository):
                 logger.info(f"Collection '{self.collection_name}' created successfully")
             else:
                 logger.info(f"Collection '{self.collection_name}' already exists")
-            
+
+            # Create search_queries collection (lightweight, for recalculation)
+            queries_exists = any(
+                c.name == SEARCH_QUERIES_COLLECTION for c in collections
+            )
+            if not queries_exists:
+                logger.info(f"Creating collection '{SEARCH_QUERIES_COLLECTION}'")
+                self.client.create_collection(
+                    collection_name=SEARCH_QUERIES_COLLECTION,
+                    vectors_config=VectorParams(
+                        size=self.vector_size,
+                        distance=Distance.COSINE,
+                    ),
+                )
+                logger.info(f"Collection '{SEARCH_QUERIES_COLLECTION}' created")
+            else:
+                logger.info(f"Collection '{SEARCH_QUERIES_COLLECTION}' already exists")
+
         except Exception as e:
             logger.error(f"Failed to initialize Qdrant: {e}")
             raise
@@ -297,6 +316,44 @@ class QdrantVectorRepository(VectorRepository):
             logger.error(f"Error deleting embedding {embedding_id}: {e}")
             return False
     
+    async def store_query_vector(self, point_id: str, vector: list, search_id: str) -> bool:
+        """Store a search query vector in the search_queries collection."""
+        try:
+            point = PointStruct(
+                id=point_id,
+                vector=vector,
+                payload={"search_id": search_id},
+            )
+            result = self.client.upsert(
+                collection_name=SEARCH_QUERIES_COLLECTION,
+                points=[point],
+                wait=True,
+            )
+            if result.status == UpdateStatus.COMPLETED:
+                logger.debug(f"Stored query vector {point_id} for search {search_id}")
+                return True
+            else:
+                logger.error(f"Failed to store query vector {point_id}: {result}")
+                return False
+        except Exception as e:
+            logger.error(f"Error storing query vector {point_id}: {e}")
+            return False
+
+    async def retrieve_query_vector(self, point_id: str) -> Optional[list]:
+        """Retrieve a stored query vector by its Qdrant point ID."""
+        try:
+            results = self.client.retrieve(
+                collection_name=SEARCH_QUERIES_COLLECTION,
+                ids=[point_id],
+                with_vectors=True,
+            )
+            if not results:
+                return None
+            return results[0].vector
+        except Exception as e:
+            logger.error(f"Failed to retrieve query vector {point_id}: {e}")
+            return None
+
     async def get_collection_stats(self) -> Dict:
         """Get collection statistics."""
         try:

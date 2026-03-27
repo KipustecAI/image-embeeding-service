@@ -269,21 +269,24 @@ Returns all searches by a user, most recent first.
 
 ## POST /api/v1/recalculate/searches — Recalculate Searches
 
-Re-queues old completed searches for reprocessing against the current Qdrant state.
+Re-runs old completed searches against the current Qdrant state using stored query vectors. No GPU needed — the backend retrieves the original query vector from the `search_queries` Qdrant collection and re-searches `evidence_embeddings` directly (~100ms per search).
+
+Searches created before the query vector storage feature was added are skipped (reported in `skipped` count).
 
 **Query Parameters:**
 
 | Parameter | Type | Default | Range | Description |
 |-----------|------|---------|-------|-------------|
 | limit | int | 20 | 1-100 | Max searches to recalculate |
-| hours_old | int | 2 | 1-168 | Only searches older than X hours |
+| hours_old | int | 2 | 0-168 | Only searches completed more than X hours ago (0 = all) |
 
 **Response:**
 ```json
 {
   "success": true,
-  "message": "Queued 5 searches for recalculation",
-  "total": 5
+  "message": "Recalculated 3 searches (2 skipped — no stored vector)",
+  "total": 3,
+  "skipped": 2
 }
 ```
 
@@ -305,7 +308,24 @@ The backend consumer receives pre-computed 512-dim vectors and stores them direc
 POST /api/v1/search → XADD evidence:search → GPU compute → XADD search:results → Backend → Qdrant search → DB
 ```
 
+On completion, the query vector is stored in the `search_queries` Qdrant collection for future recalculation.
+
 End-to-end latency: ~2 seconds.
+
+### Search Recalculation (no GPU)
+
+```
+Scheduled job / POST /api/v1/recalculate → retrieve query vector from Qdrant → search evidence_embeddings → update matches in DB
+```
+
+Uses stored query vectors — no GPU, no image re-download. ~100ms per search.
+
+## Qdrant Collections
+
+| Collection | Purpose |
+|------------|---------|
+| `evidence_embeddings` | Evidence image vectors (512-dim CLIP ViT-B-32, cosine distance). Payload indices on `camera_id`, `evidence_id`, `source_type` |
+| `search_queries` | Stored query vectors for recalculation. One point per search, payload: `search_id` only |
 
 ## Database Tables
 
@@ -313,7 +333,7 @@ End-to-end latency: ~2 seconds.
 |-------|---------|
 | `embedding_requests` | Tracks each evidence through the embedding pipeline |
 | `evidence_embeddings` | One row per vector stored in Qdrant (FK → embedding_requests) |
-| `search_requests` | Tracks each similarity search lifecycle |
+| `search_requests` | Tracks each similarity search lifecycle. `qdrant_query_point_id` links to the stored query vector |
 | `search_matches` | Individual match results per search (FK → search_requests) |
 
 ## Background Jobs
@@ -321,5 +341,5 @@ End-to-end latency: ~2 seconds.
 | Job | Interval | Purpose |
 |-----|----------|---------|
 | Stale recovery | 5m | Reset stuck WORKING rows back to TO_WORK |
-| Recalculation | 1h | Re-run old searches against new evidence |
+| Recalculation | 1h | Re-search Qdrant with stored query vectors (no GPU needed) |
 | Cleanup | 24h | Delete completed/error rows older than 30 days |
