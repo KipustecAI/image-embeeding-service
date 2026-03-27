@@ -25,11 +25,12 @@ if [[ -f "$ENV_FILE" ]]; then
   set -a; source "$ENV_FILE"; set +a
 fi
 
-REDIS_CLI="$(which redis-cli)"
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 REDIS_HOST="${REDIS_HOST:-localhost}"
 REDIS_PORT="${REDIS_PORT:-6379}"
 REDIS_PASS="${REDIS_PASSWORD:-}"
 REDIS_STREAMS_DB="${REDIS_STREAMS_DB:-3}"
+STREAM_EMBEDDINGS_RESULTS="${STREAM_EMBEDDINGS_RESULTS:-embeddings:results}"
 
 BACKEND_URL="${BACKEND_URL:-http://localhost:8001}"
 PAYLOAD_FILE="${PROJECT_DIR}/data/payload_example.json"
@@ -43,11 +44,16 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-# Redis helper
+# Redis helper — uses docker exec if redis-cli not installed locally
 rcli() {
   local auth_args=()
   if [[ -n "$REDIS_PASS" ]]; then auth_args=(-a "$REDIS_PASS"); fi
-  "$REDIS_CLI" -h "$REDIS_HOST" -p "$REDIS_PORT" "${auth_args[@]}" -n "$REDIS_STREAMS_DB" "$@" 2>/dev/null
+
+  if command -v redis-cli > /dev/null 2>&1; then
+    redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" "${auth_args[@]}" -n "$REDIS_STREAMS_DB" "$@" 2>/dev/null
+  else
+    docker exec embedding-redis redis-cli "${auth_args[@]}" -n "$REDIS_STREAMS_DB" "$@" 2>/dev/null
+  fi
 }
 
 log()  { printf "${CYAN}[%s]${NC} %s\n" "$(date '+%H:%M:%S')" "$1"; }

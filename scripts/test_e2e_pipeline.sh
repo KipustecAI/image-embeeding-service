@@ -15,6 +15,8 @@
 
 set -euo pipefail
 
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
 # ---------------------------------------------------------------------------
 # Config — reads from .env.dev or falls back to local defaults
 # ---------------------------------------------------------------------------
@@ -60,10 +62,13 @@ NC='\033[0m'
 # ---------------------------------------------------------------------------
 rcli() {
   local auth_args=()
-  if [[ -n "$REDIS_PASS" ]]; then
-    auth_args=(-a "$REDIS_PASS")
+  if [[ -n "$REDIS_PASS" ]]; then auth_args=(-a "$REDIS_PASS"); fi
+
+  if command -v redis-cli > /dev/null 2>&1; then
+    redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" "${auth_args[@]}" -n "$REDIS_STREAMS_DB" "$@" 2>/dev/null
+  else
+    docker exec embedding-redis redis-cli "${auth_args[@]}" -n "$REDIS_STREAMS_DB" "$@" 2>/dev/null
   fi
-  "$REDIS_CLI" -h "$REDIS_HOST" -p "$REDIS_PORT" "${auth_args[@]}" -n "$REDIS_STREAMS_DB" "$@" 2>/dev/null
 }
 
 log()  { printf "${CYAN}[%s]${NC} %s\n" "$(date '+%H:%M:%S')" "$1"; }
