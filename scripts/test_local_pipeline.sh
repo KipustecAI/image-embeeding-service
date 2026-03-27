@@ -101,25 +101,14 @@ test_full_pipeline() {
   log "Camera ID:   ${camera_id}"
   log "ZIP URL:     ${zip_url}"
 
-  # Build image URLs from local data/inputs (pick larger images that pass diversity filter)
-  local image_urls_json
-  image_urls_json=$(python3 -c "
-import os, json
-d = '${INPUT_DIR}'
-imgs = []
-for f in sorted(os.listdir(d)):
-    p = os.path.join(d, f)
-    if f.lower().endswith(('.jpg','.jpeg','.png')) and os.path.getsize(p) > 10000:
-        imgs.append('file://' + p)
-    if len(imgs) >= 5:
-        break
-# Fallback to any images if no large ones found
-if not imgs:
-    for f in sorted(os.listdir(d))[:5]:
-        if f.lower().endswith(('.jpg','.jpeg','.png')):
-            imgs.append('file://' + os.path.join(d, f))
-print(json.dumps(imgs))
-")
+  # Build image URLs from local data/inputs
+  local image_urls_json="["
+  local first=true
+  for f in $(ls "$INPUT_DIR"/*.{jpg,JPG,jpeg,png} 2>/dev/null | head -5); do
+    if [[ "$first" == "true" ]]; then first=false; else image_urls_json+=","; fi
+    image_urls_json+="\"file://${f}\""
+  done
+  image_urls_json+="]"
 
   local img_count=$(echo "$image_urls_json" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))")
   log "Using ${img_count} local images from data/inputs/"

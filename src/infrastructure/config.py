@@ -91,10 +91,10 @@ class Settings(BaseSettings):
         return v
     
     model_config = {
-        "env_file": ".env",
+        "env_file": (".env.dev", ".env"),
         "env_file_encoding": "utf-8",
         "case_sensitive": False,
-        "extra": "ignore"
+        "extra": "ignore",
     }
 
 
