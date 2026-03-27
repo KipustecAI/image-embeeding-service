@@ -39,25 +39,30 @@ async def dispatch_embedding_batch():
         logger.error("ARQ pool not set — cannot dispatch embedding batch")
         return
 
-    async with get_session() as session:
-        repo = EmbeddingRequestRepository(session)
-        pending = await repo.get_pending_requests(limit=settings.batch_trigger_size)
+    try:
+        async with get_session() as session:
+            repo = EmbeddingRequestRepository(session)
+            pending = await repo.get_pending_requests(limit=settings.batch_trigger_size)
 
-        if not pending:
-            return
+            if not pending:
+                logger.debug("dispatch_embedding_batch: no pending rows found")
+                return
 
-        request_ids = [str(r.id) for r in pending]
+            request_ids = [str(r.id) for r in pending]
 
-        for r in pending:
-            r.status = EmbeddingRequestStatus.WORKING
-            r.processing_started_at = datetime.utcnow()
-        await session.flush()
+            for r in pending:
+                r.status = EmbeddingRequestStatus.WORKING
+                r.processing_started_at = datetime.utcnow()
+            await session.flush()
 
-        await _arq_pool.enqueue_job(
-            "process_evidence_embeddings_batch", request_ids
-        )
+            await _arq_pool.enqueue_job(
+                "process_evidence_embeddings_batch", request_ids
+            )
 
-    logger.info(f"Dispatched {len(request_ids)} embedding requests to ARQ")
+        logger.info(f"Dispatched {len(request_ids)} embedding requests to ARQ")
+
+    except Exception as e:
+        logger.error(f"dispatch_embedding_batch failed: {e}", exc_info=True)
 
 
 async def dispatch_search_batch():
@@ -66,25 +71,30 @@ async def dispatch_search_batch():
         logger.error("ARQ pool not set — cannot dispatch search batch")
         return
 
-    async with get_session() as session:
-        repo = SearchRequestRepository(session)
-        pending = await repo.get_pending_requests(limit=settings.batch_trigger_search_size)
+    try:
+        async with get_session() as session:
+            repo = SearchRequestRepository(session)
+            pending = await repo.get_pending_requests(limit=settings.batch_trigger_search_size)
 
-        if not pending:
-            return
+            if not pending:
+                logger.debug("dispatch_search_batch: no pending rows found")
+                return
 
-        request_ids = [str(r.id) for r in pending]
+            request_ids = [str(r.id) for r in pending]
 
-        for r in pending:
-            r.status = SearchRequestStatus.WORKING
-            r.processing_started_at = datetime.utcnow()
-        await session.flush()
+            for r in pending:
+                r.status = SearchRequestStatus.WORKING
+                r.processing_started_at = datetime.utcnow()
+            await session.flush()
 
-        await _arq_pool.enqueue_job(
-            "process_image_searches_batch", request_ids
-        )
+            await _arq_pool.enqueue_job(
+                "process_image_searches_batch", request_ids
+            )
 
-    logger.info(f"Dispatched {len(request_ids)} search requests to ARQ")
+        logger.info(f"Dispatched {len(request_ids)} search requests to ARQ")
+
+    except Exception as e:
+        logger.error(f"dispatch_search_batch failed: {e}", exc_info=True)
 
 
 async def embedding_safety_net():
