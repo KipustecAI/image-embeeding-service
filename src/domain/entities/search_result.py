@@ -25,5 +25,5 @@ class SearchResult:
             "similarity_score": self.similarity_score,
             "image_url": self.image_url,
             "created_at": self.created_at.isoformat(),
-            "metadata": self.metadata or {}
+            "metadata": self.metadata or {},
         }

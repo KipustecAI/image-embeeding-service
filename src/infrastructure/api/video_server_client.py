@@ -19,11 +19,11 @@ class VideoServerClient(EvidenceRepository, ImageSearchRepository):
 
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.base_url = str(settings.video_server_base_url).rstrip('/')
+        self.base_url = str(settings.video_server_base_url).rstrip("/")
         self.api_key = settings.video_server_api_key
         self.client = httpx.AsyncClient(
             timeout=httpx.Timeout(60.0, connect=10.0),  # 60s read timeout, 10s connect timeout
-            headers={"X-API-Key": self.api_key}
+            headers={"X-API-Key": self.api_key},
         )
 
     # EvidenceRepository implementation
@@ -45,8 +45,12 @@ class VideoServerClient(EvidenceRepository, ImageSearchRepository):
                     status=item["status"],
                     created_at=datetime.fromisoformat(item["created_at"]),
                     json_data=item.get("json_data"),  # Store the full json_data
-                    updated_at=datetime.fromisoformat(item["updated_at"]) if item.get("updated_at") else None,
-                    processed_at=datetime.fromisoformat(item["processed_at"]) if item.get("processed_at") else None
+                    updated_at=datetime.fromisoformat(item["updated_at"])
+                    if item.get("updated_at")
+                    else None,
+                    processed_at=datetime.fromisoformat(item["processed_at"])
+                    if item.get("processed_at")
+                    else None,
                 )
                 evidences.append(evidence)
 
@@ -60,21 +64,19 @@ class VideoServerClient(EvidenceRepository, ImageSearchRepository):
             logger.error(f"Failed to get unembedded evidences: {e}")
             return []
 
-    async def mark_evidence_as_embedded(
-        self,
-        evidence_id: UUID,
-        embedding_ids: list[str]
-    ) -> bool:
+    async def mark_evidence_as_embedded(self, evidence_id: UUID, embedding_ids: list[str]) -> bool:
         """Update evidence status to 4 (EMBEDDED) with embedding IDs."""
         try:
             url = f"{self.base_url}/api/v1/evidences/internal/evidences/{evidence_id}/embedded"
             response = await self.client.patch(
                 url,
-                json={"embedding_ids": embedding_ids}  # Send list of IDs
+                json={"embedding_ids": embedding_ids},  # Send list of IDs
             )
             response.raise_for_status()
 
-            logger.info(f"Marked evidence {evidence_id} as embedded with {len(embedding_ids)} embeddings")
+            logger.info(
+                f"Marked evidence {evidence_id} as embedded with {len(embedding_ids)} embeddings"
+            )
             return True
 
         except httpx.HTTPError as e:
@@ -104,11 +106,15 @@ class VideoServerClient(EvidenceRepository, ImageSearchRepository):
                     search_status=item["search_status"],
                     similarity_status=item["similarity_status"],
                     created_at=datetime.fromisoformat(item["created_at"]),
-                    updated_at=datetime.fromisoformat(item["updated_at"]) if item.get("updated_at") else None,
-                    processed_at=datetime.fromisoformat(item["processed_at"]) if item.get("processed_at") else None,
+                    updated_at=datetime.fromisoformat(item["updated_at"])
+                    if item.get("updated_at")
+                    else None,
+                    processed_at=datetime.fromisoformat(item["processed_at"])
+                    if item.get("processed_at")
+                    else None,
                     metadata=item.get("metadata"),
                     results_key=item.get("results_key"),
-                    total_matches=item.get("total_matches", 0)
+                    total_matches=item.get("total_matches", 0),
                 )
                 searches.append(search)
 
@@ -128,7 +134,7 @@ class VideoServerClient(EvidenceRepository, ImageSearchRepository):
         search_status: int,
         similarity_status: int | None = None,
         total_matches: int | None = None,
-        metadata: dict[str, Any] | None = None
+        metadata: dict[str, Any] | None = None,
     ) -> bool:
         """Update search processing status."""
         try:
@@ -160,10 +166,7 @@ class VideoServerClient(EvidenceRepository, ImageSearchRepository):
             return False
 
     async def store_search_results(
-        self,
-        search_id: UUID,
-        results: dict[str, Any],
-        ttl: int = 3600
+        self, search_id: UUID, results: dict[str, Any], ttl: int = 3600
     ) -> bool:
         """Store search results in Redis cache via API."""
         try:
@@ -180,7 +183,7 @@ class VideoServerClient(EvidenceRepository, ImageSearchRepository):
                     "search_image_url": "",
                     "total_matches": 0,
                     "results": [],
-                    "processed_at": datetime.utcnow().isoformat()
+                    "processed_at": datetime.utcnow().isoformat(),
                 }
 
             response = await self.client.post(url, json=payload)

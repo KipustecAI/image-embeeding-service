@@ -107,8 +107,7 @@ async def _process_search_result(payload: dict, message_id: str):
 
         total_matches = len(matches)
         similarity_status = (
-            SimilarityStatus.MATCHES_FOUND if total_matches > 0
-            else SimilarityStatus.NO_MATCHES
+            SimilarityStatus.MATCHES_FOUND if total_matches > 0 else SimilarityStatus.NO_MATCHES
         )
 
         # Store query vector in Qdrant for future recalculation
@@ -153,14 +152,16 @@ async def _process_search_result(payload: dict, message_id: str):
 
             # Create SearchMatch rows for each result
             for match in matches:
-                session.add(SearchMatch(
-                    search_request_id=request.id,
-                    evidence_id=str(match.evidence_id),
-                    camera_id=str(match.camera_id) if match.camera_id else None,
-                    similarity_score=match.similarity_score,
-                    image_url=match.image_url,
-                    match_metadata=match.metadata,
-                ))
+                session.add(
+                    SearchMatch(
+                        search_request_id=request.id,
+                        evidence_id=str(match.evidence_id),
+                        camera_id=str(match.camera_id) if match.camera_id else None,
+                        similarity_score=match.similarity_score,
+                        image_url=match.image_url,
+                        match_metadata=match.metadata,
+                    )
+                )
 
         logger.info(f"Search {search_id}: {total_matches} matches stored (threshold={threshold})")
 

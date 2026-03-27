@@ -111,9 +111,7 @@ class BatchTrigger:
             "pending_count": self._pending_count,
             "batch_size": self.batch_size,
             "max_wait_seconds": self.max_wait_seconds,
-            "has_active_timer": (
-                self._timeout_task is not None and not self._timeout_task.done()
-            ),
+            "has_active_timer": (self._timeout_task is not None and not self._timeout_task.done()),
             "total_flushes": self._total_flushes,
             "total_events": self._total_events,
             "flush_reasons": self._flush_reasons,

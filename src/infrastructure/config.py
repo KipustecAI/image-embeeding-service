@@ -27,8 +27,12 @@ class Settings(BaseSettings):
     qdrant_host: str = Field("localhost", validation_alias="QDRANT_HOST")
     qdrant_port: int = Field(6333, validation_alias="QDRANT_PORT")
     qdrant_api_key: str | None = Field(None, validation_alias="QDRANT_API_KEY")
-    qdrant_collection_name: str = Field("evidence_embeddings", validation_alias="QDRANT_COLLECTION_NAME")
-    qdrant_vector_size: int = Field(512, validation_alias="QDRANT_VECTOR_SIZE")  # CLIP ViT-B-32 dimension
+    qdrant_collection_name: str = Field(
+        "evidence_embeddings", validation_alias="QDRANT_COLLECTION_NAME"
+    )
+    qdrant_vector_size: int = Field(
+        512, validation_alias="QDRANT_VECTOR_SIZE"
+    )  # CLIP ViT-B-32 dimension
 
     # Redis Configuration
     redis_host: str = Field("localhost", validation_alias="REDIS_HOST")
@@ -39,15 +43,21 @@ class Settings(BaseSettings):
     # Redis Streams
     redis_streams_db: int = Field(3, validation_alias="REDIS_STREAMS_DB")
     # Publishing to GPU (input streams)
-    stream_evidence_search: str = Field("evidence:search", validation_alias="STREAM_EVIDENCE_SEARCH")
+    stream_evidence_search: str = Field(
+        "evidence:search", validation_alias="STREAM_EVIDENCE_SEARCH"
+    )
     # Consuming from GPU (output streams)
-    stream_embeddings_results: str = Field("embeddings:results", validation_alias="STREAM_EMBEDDINGS_RESULTS")
+    stream_embeddings_results: str = Field(
+        "embeddings:results", validation_alias="STREAM_EMBEDDINGS_RESULTS"
+    )
     stream_search_results: str = Field("search:results", validation_alias="STREAM_SEARCH_RESULTS")
     stream_backend_group: str = Field("backend-workers", validation_alias="STREAM_BACKEND_GROUP")
     stream_consumer_block_ms: int = Field(5000, validation_alias="STREAM_CONSUMER_BLOCK_MS")
     stream_consumer_batch_size: int = Field(10, validation_alias="STREAM_CONSUMER_BATCH_SIZE")
     stream_reclaim_idle_ms: int = Field(3_600_000, validation_alias="STREAM_RECLAIM_IDLE_MS")
-    stream_dead_letter_max_retries: int = Field(3, validation_alias="STREAM_DEAD_LETTER_MAX_RETRIES")
+    stream_dead_letter_max_retries: int = Field(
+        3, validation_alias="STREAM_DEAD_LETTER_MAX_RETRIES"
+    )
     stream_consumer_concurrency: int = Field(1, validation_alias="STREAM_CONSUMER_CONCURRENCY")
 
     # Recalculation
@@ -61,7 +71,9 @@ class Settings(BaseSettings):
     cleanup_days: int = Field(30, validation_alias="CLEANUP_DAYS")
 
     # Search Configuration
-    default_similarity_threshold: float = Field(0.75, validation_alias="DEFAULT_SIMILARITY_THRESHOLD")
+    default_similarity_threshold: float = Field(
+        0.75, validation_alias="DEFAULT_SIMILARITY_THRESHOLD"
+    )
     max_search_results: int = Field(100, validation_alias="MAX_SEARCH_RESULTS")
 
     @field_validator("environment")

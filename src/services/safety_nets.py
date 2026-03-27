@@ -47,7 +47,9 @@ async def recover_stale_working():
             if r.retry_count >= settings.max_retries:
                 r.status = EmbeddingRequestStatus.ERROR
                 r.error_message = "Max retries exceeded (stale WORKING recovery)"
-                logger.error(f"Embedding request {r.id} failed after {settings.max_retries} retries")
+                logger.error(
+                    f"Embedding request {r.id} failed after {settings.max_retries} retries"
+                )
             else:
                 r.status = EmbeddingRequestStatus.TO_WORK
                 r.worker_id = None
@@ -121,24 +123,23 @@ async def recalculate_searches():
             )
 
             # Delete old matches
-            await session.execute(
-                delete(SearchMatch).where(SearchMatch.search_request_id == s.id)
-            )
+            await session.execute(delete(SearchMatch).where(SearchMatch.search_request_id == s.id))
 
             for match in matches:
-                session.add(SearchMatch(
-                    search_request_id=s.id,
-                    evidence_id=str(match.evidence_id),
-                    camera_id=str(match.camera_id) if match.camera_id else None,
-                    similarity_score=match.similarity_score,
-                    image_url=match.image_url,
-                    match_metadata=match.metadata,
-                ))
+                session.add(
+                    SearchMatch(
+                        search_request_id=s.id,
+                        evidence_id=str(match.evidence_id),
+                        camera_id=str(match.camera_id) if match.camera_id else None,
+                        similarity_score=match.similarity_score,
+                        image_url=match.image_url,
+                        match_metadata=match.metadata,
+                    )
+                )
 
             s.total_matches = len(matches)
             s.similarity_status = (
-                SimilarityStatus.MATCHES_FOUND if len(matches) > 0
-                else SimilarityStatus.NO_MATCHES
+                SimilarityStatus.MATCHES_FOUND if len(matches) > 0 else SimilarityStatus.NO_MATCHES
             )
             s.processing_completed_at = datetime.utcnow()
             recalculated += 1
@@ -155,10 +156,12 @@ async def cleanup_old_requests():
         result = await session.execute(
             delete(EmbeddingRequest).where(
                 and_(
-                    EmbeddingRequest.status.in_([
-                        EmbeddingRequestStatus.DONE,
-                        EmbeddingRequestStatus.ERROR,
-                    ]),
+                    EmbeddingRequest.status.in_(
+                        [
+                            EmbeddingRequestStatus.DONE,
+                            EmbeddingRequestStatus.ERROR,
+                        ]
+                    ),
                     EmbeddingRequest.created_at < cutoff,
                 )
             )
@@ -168,10 +171,12 @@ async def cleanup_old_requests():
         result = await session.execute(
             delete(SearchRequest).where(
                 and_(
-                    SearchRequest.status.in_([
-                        SearchRequestStatus.COMPLETED,
-                        SearchRequestStatus.ERROR,
-                    ]),
+                    SearchRequest.status.in_(
+                        [
+                            SearchRequestStatus.COMPLETED,
+                            SearchRequestStatus.ERROR,
+                        ]
+                    ),
                     SearchRequest.created_at < cutoff,
                 )
             )

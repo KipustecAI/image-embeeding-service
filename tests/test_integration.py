@@ -18,7 +18,9 @@ import pytest_asyncio
 
 # Auto-skip entire module if CLIP dependencies are missing
 np = pytest.importorskip("numpy", reason="numpy not available (CLIP dependency)")
-pytest.importorskip("sentence_transformers", reason="sentence-transformers not available — skip CLIP tests")
+pytest.importorskip(
+    "sentence_transformers", reason="sentence-transformers not available — skip CLIP tests"
+)
 
 # ── Paths ──
 PROJECT_DIR = Path(__file__).parent.parent
@@ -39,6 +41,7 @@ def event_loop():
 @pytest_asyncio.fixture(scope="session")
 async def settings():
     from src.infrastructure.config import get_settings
+
     s = get_settings()
     return s
 
@@ -46,6 +49,7 @@ async def settings():
 @pytest_asyncio.fixture(scope="session")
 async def embedder(settings):
     from src.infrastructure.embedding.clip_embedder import CLIPEmbedder
+
     clip = CLIPEmbedder(settings)
     await clip.initialize()
     yield clip
@@ -55,6 +59,7 @@ async def embedder(settings):
 @pytest_asyncio.fixture(scope="session")
 async def vector_repo(settings):
     from src.infrastructure.vector_db.qdrant_repository import QdrantVectorRepository
+
     repo = QdrantVectorRepository(settings)
     # Override collection name for test isolation
     repo.collection_name = TEST_COLLECTION
@@ -70,6 +75,7 @@ async def vector_repo(settings):
 @pytest_asyncio.fixture(scope="session")
 async def db_session():
     from src.infrastructure.database import get_session
+
     async with get_session() as session:
         yield session
 
@@ -78,20 +84,26 @@ def get_input_images():
     """Get list of image file paths from data/inputs/."""
     if not INPUT_DIR.exists():
         return []
-    return sorted([
-        str(p) for p in INPUT_DIR.iterdir()
-        if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")
-    ])
+    return sorted(
+        [
+            str(p)
+            for p in INPUT_DIR.iterdir()
+            if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")
+        ]
+    )
 
 
 def get_request_images():
     """Get list of image file paths from data/request/."""
     if not REQUEST_DIR.exists():
         return []
-    return sorted([
-        str(p) for p in REQUEST_DIR.iterdir()
-        if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")
-    ])
+    return sorted(
+        [
+            str(p)
+            for p in REQUEST_DIR.iterdir()
+            if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")
+        ]
+    )
 
 
 # ── Tests ──
@@ -257,7 +269,9 @@ class TestQdrantStorage:
         # Best match should be very high similarity (same image)
         best_score = results[0].similarity_score
         print(f"\n  Best match score: {best_score:.4f}")
-        assert best_score > 0.8, f"Expected high similarity for identical image, got {best_score:.4f}"
+        assert best_score > 0.8, (
+            f"Expected high similarity for identical image, got {best_score:.4f}"
+        )
 
     @pytest.mark.asyncio
     async def test_search_with_threshold_filtering(self, embedder, vector_repo):
@@ -267,10 +281,14 @@ class TestQdrantStorage:
         assert query_vector is not None
 
         results_low = await vector_repo.search_similar(
-            query_vector=query_vector, limit=50, threshold=0.3,
+            query_vector=query_vector,
+            limit=50,
+            threshold=0.3,
         )
         results_high = await vector_repo.search_similar(
-            query_vector=query_vector, limit=50, threshold=0.9,
+            query_vector=query_vector,
+            limit=50,
+            threshold=0.9,
         )
 
         print(f"\n  threshold=0.3: {len(results_low)} results")
@@ -331,14 +349,16 @@ class TestDiversityFilter:
 
         # Very high min dimension — should reject small crops
         f = DiversityFilter(
-            threshold=0.10, min_dimension=2000, max_images=10, min_images=0,
+            threshold=0.10,
+            min_dimension=2000,
+            max_images=10,
+            min_images=0,
         )
         filtered = await f.filter_image_urls(urls)
 
         print(f"\n  With min_dimension=2000: {len(filtered)}/{len(urls)} kept")
         # Small crops (~1600-1900 bytes) are likely < 2000px, large JPGs should pass
         assert len(filtered) < len(urls), "High min_dimension should reject some images"
-
 
 
 # DB tests moved to tests/test_db.py (CI-safe, no CLIP dependency)

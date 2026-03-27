@@ -19,16 +19,13 @@ class EmbedEvidenceImagesUseCase:
         self,
         evidence_repo: EvidenceRepository,
         vector_repo: VectorRepository,
-        embedding_service: EmbeddingService
+        embedding_service: EmbeddingService,
     ):
         self.evidence_repo = evidence_repo
         self.vector_repo = vector_repo
         self.embedding_service = embedding_service
 
-    async def execute_single(
-        self,
-        request: EvidenceEmbeddingRequest
-    ) -> EvidenceEmbeddingResponse:
+    async def execute_single(self, request: EvidenceEmbeddingRequest) -> EvidenceEmbeddingResponse:
         """Embed a single evidence image."""
         try:
             # Check if already embedded
@@ -38,7 +35,7 @@ class EmbedEvidenceImagesUseCase:
                     evidence_id=request.evidence_id,
                     success=True,
                     embedding_id=str(request.evidence_id),
-                    processed_at=datetime.utcnow()
+                    processed_at=datetime.utcnow(),
                 )
 
             # Generate embedding
@@ -49,9 +46,7 @@ class EmbedEvidenceImagesUseCase:
                 error_msg = f"Failed to generate embedding for {request.image_url}"
                 logger.error(error_msg)
                 return EvidenceEmbeddingResponse(
-                    evidence_id=request.evidence_id,
-                    success=False,
-                    error_message=error_msg
+                    evidence_id=request.evidence_id, success=False, error_message=error_msg
                 )
 
             # Create embedding entity
@@ -60,7 +55,7 @@ class EmbedEvidenceImagesUseCase:
                 vector=vector,
                 image_url=request.image_url,
                 camera_id=request.camera_id,
-                additional_metadata=request.metadata
+                additional_metadata=request.metadata,
             )
 
             # Store in vector database
@@ -73,24 +68,20 @@ class EmbedEvidenceImagesUseCase:
                     success=True,
                     embedding_id=embedding.id,
                     vector_dimension=embedding.vector_dimension,
-                    processed_at=datetime.utcnow()
+                    processed_at=datetime.utcnow(),
                 )
             else:
                 error_msg = "Failed to store embedding in vector database"
                 logger.error(f"{error_msg} for evidence {request.evidence_id}")
                 return EvidenceEmbeddingResponse(
-                    evidence_id=request.evidence_id,
-                    success=False,
-                    error_message=error_msg
+                    evidence_id=request.evidence_id, success=False, error_message=error_msg
                 )
 
         except Exception as e:
             error_msg = f"Unexpected error: {str(e)}"
             logger.error(f"Failed to embed evidence {request.evidence_id}: {e}")
             return EvidenceEmbeddingResponse(
-                evidence_id=request.evidence_id,
-                success=False,
-                error_message=error_msg
+                evidence_id=request.evidence_id, success=False, error_message=error_msg
             )
 
     async def process_evidence_images(self, evidence: Evidence) -> tuple[bool, list[str]]:
@@ -109,11 +100,13 @@ class EmbedEvidenceImagesUseCase:
         for idx, image_url in enumerate(image_urls):
             try:
                 # Generate embedding for each image
-                logger.info(f"Processing image {idx+1}/{len(image_urls)} for evidence {evidence.id}")
+                logger.info(
+                    f"Processing image {idx + 1}/{len(image_urls)} for evidence {evidence.id}"
+                )
                 vector = await self.embedding_service.generate_embedding(image_url)
 
                 if vector is None:
-                    logger.error(f"Failed to generate embedding for image {idx+1}: {image_url}")
+                    logger.error(f"Failed to generate embedding for image {idx + 1}: {image_url}")
                     all_success = False
                     continue
 
@@ -129,7 +122,7 @@ class EmbedEvidenceImagesUseCase:
                     "total_images": len(image_urls),
                     "image_url": image_url,
                     "created_at": datetime.utcnow().isoformat(),
-                    "summary": summary
+                    "summary": summary,
                 }
 
                 # TODO: Add these fields when available from evidence json_data:
@@ -155,7 +148,7 @@ class EmbedEvidenceImagesUseCase:
                     camera_id=evidence.camera_id,
                     created_at=datetime.utcnow(),
                     metadata=metadata,
-                    source_type="evidence"
+                    source_type="evidence",
                 )
 
                 # Store in vector database
@@ -163,13 +156,13 @@ class EmbedEvidenceImagesUseCase:
 
                 if success:
                     embedding_ids.append(embedding_id)
-                    logger.info(f"Successfully embedded image {idx+1}/{len(image_urls)}")
+                    logger.info(f"Successfully embedded image {idx + 1}/{len(image_urls)}")
                 else:
-                    logger.error(f"Failed to store embedding for image {idx+1}")
+                    logger.error(f"Failed to store embedding for image {idx + 1}")
                     all_success = False
 
             except Exception as e:
-                logger.error(f"Error processing image {idx+1} for evidence {evidence.id}: {e}")
+                logger.error(f"Error processing image {idx + 1} for evidence {evidence.id}: {e}")
                 all_success = False
 
         return all_success, embedding_ids
@@ -195,7 +188,7 @@ class EmbedEvidenceImagesUseCase:
                     failed=0,
                     processing_time_ms=0,
                     errors=[],
-                    embedded_ids=[]
+                    embedded_ids=[],
                 )
 
             logger.info(f"Processing {total} evidences for embedding")
@@ -204,38 +197,42 @@ class EmbedEvidenceImagesUseCase:
             for evidence in evidences:
                 try:
                     # Process all images for this evidence
-                    all_success, evidence_embedding_ids = await self.process_evidence_images(evidence)
+                    all_success, evidence_embedding_ids = await self.process_evidence_images(
+                        evidence
+                    )
 
                     if evidence_embedding_ids:
                         # Mark evidence as embedded (status 3 -> 4)
                         success = await self.evidence_repo.mark_evidence_as_embedded(
-                            evidence.id,
-                            evidence_embedding_ids
+                            evidence.id, evidence_embedding_ids
                         )
 
                         if success:
                             successful += 1
                             embedded_ids.extend(evidence_embedding_ids)
-                            logger.info(f"Evidence {evidence.id} marked as embedded with {len(evidence_embedding_ids)} images")
+                            logger.info(
+                                f"Evidence {evidence.id} marked as embedded with {len(evidence_embedding_ids)} images"
+                            )
                         else:
                             failed += 1
-                            errors.append({
-                                "evidence_id": str(evidence.id),
-                                "error": "Failed to update evidence status"
-                            })
+                            errors.append(
+                                {
+                                    "evidence_id": str(evidence.id),
+                                    "error": "Failed to update evidence status",
+                                }
+                            )
                     else:
                         failed += 1
-                        errors.append({
-                            "evidence_id": str(evidence.id),
-                            "error": "No images could be embedded"
-                        })
+                        errors.append(
+                            {
+                                "evidence_id": str(evidence.id),
+                                "error": "No images could be embedded",
+                            }
+                        )
 
                 except Exception as e:
                     failed += 1
-                    errors.append({
-                        "evidence_id": str(evidence.id),
-                        "error": str(e)
-                    })
+                    errors.append({"evidence_id": str(evidence.id), "error": str(e)})
                     logger.error(f"Failed to process evidence {evidence.id}: {e}")
 
             processing_time = (time.time() - start_time) * 1000
@@ -251,7 +248,7 @@ class EmbedEvidenceImagesUseCase:
                 failed=failed,
                 processing_time_ms=processing_time,
                 errors=errors,
-                embedded_ids=embedded_ids
+                embedded_ids=embedded_ids,
             )
 
         except Exception as e:
@@ -264,5 +261,5 @@ class EmbedEvidenceImagesUseCase:
                 failed=failed,
                 processing_time_ms=processing_time,
                 errors=[{"error": str(e)}],
-                embedded_ids=embedded_ids
+                embedded_ids=embedded_ids,
             )

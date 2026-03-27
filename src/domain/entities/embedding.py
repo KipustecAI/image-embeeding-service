@@ -25,16 +25,21 @@ class ImageEmbedding:
     user_id: UUID | None = None
 
     @classmethod
-    def from_evidence(cls, evidence_id: UUID, vector: np.ndarray,
-                     image_url: str, camera_id: UUID,
-                     additional_metadata: dict | None = None) -> "ImageEmbedding":
+    def from_evidence(
+        cls,
+        evidence_id: UUID,
+        vector: np.ndarray,
+        image_url: str,
+        camera_id: UUID,
+        additional_metadata: dict | None = None,
+    ) -> "ImageEmbedding":
         """Create embedding from evidence."""
         metadata = {
             "source_type": "evidence",
             "evidence_id": str(evidence_id),
             "camera_id": str(camera_id),
             "image_url": image_url,
-            "created_at": datetime.utcnow().isoformat()
+            "created_at": datetime.utcnow().isoformat(),
         }
         if additional_metadata:
             metadata.update(additional_metadata)
@@ -47,20 +52,25 @@ class ImageEmbedding:
             source_type="evidence",
             image_url=image_url,
             camera_id=camera_id,
-            evidence_id=evidence_id
+            evidence_id=evidence_id,
         )
 
     @classmethod
-    def from_search(cls, search_id: UUID, vector: np.ndarray,
-                   image_url: str, user_id: UUID,
-                   additional_metadata: dict | None = None) -> "ImageEmbedding":
+    def from_search(
+        cls,
+        search_id: UUID,
+        vector: np.ndarray,
+        image_url: str,
+        user_id: UUID,
+        additional_metadata: dict | None = None,
+    ) -> "ImageEmbedding":
         """Create embedding from image search."""
         metadata = {
             "source_type": "search",
             "search_id": str(search_id),
             "user_id": str(user_id),
             "image_url": image_url,
-            "created_at": datetime.utcnow().isoformat()
+            "created_at": datetime.utcnow().isoformat(),
         }
         if additional_metadata:
             metadata.update(additional_metadata)
@@ -73,7 +83,7 @@ class ImageEmbedding:
             source_type="search",
             image_url=image_url,
             search_id=search_id,
-            user_id=user_id
+            user_id=user_id,
         )
 
     @property
@@ -93,8 +103,4 @@ class ImageEmbedding:
 
     def to_qdrant_point(self) -> dict:
         """Convert to Qdrant point format."""
-        return {
-            "id": self.id,
-            "vector": self.vector.tolist(),
-            "payload": self.metadata
-        }
+        return {"id": self.id, "vector": self.vector.tolist(), "payload": self.metadata}

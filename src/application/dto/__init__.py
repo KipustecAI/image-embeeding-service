@@ -15,5 +15,5 @@ __all__ = [
     "ImageSearchRequest",
     "ImageSearchResponse",
     "SearchResultDTO",
-    "BatchEmbeddingResult"
+    "BatchEmbeddingResult",
 ]

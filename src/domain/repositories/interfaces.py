@@ -38,17 +38,14 @@ class ImageSearchRepository(ABC):
         search_status: int,
         similarity_status: int | None = None,
         total_matches: int | None = None,
-        metadata: dict[str, Any] | None = None
+        metadata: dict[str, Any] | None = None,
     ) -> bool:
         """Update search processing status."""
         pass
 
     @abstractmethod
     async def store_search_results(
-        self,
-        search_id: UUID,
-        results: list[SearchResult],
-        ttl: int = 3600
+        self, search_id: UUID, results: list[SearchResult], ttl: int = 3600
     ) -> bool:
         """Store search results in Redis cache."""
         pass
@@ -78,7 +75,7 @@ class VectorRepository(ABC):
         query_vector: np.ndarray,
         limit: int = 50,
         threshold: float = 0.75,
-        filter_conditions: dict | None = None
+        filter_conditions: dict | None = None,
     ) -> list[SearchResult]:
         """Search for similar vectors in database."""
         pass

@@ -8,6 +8,7 @@ from uuid import UUID
 @dataclass
 class SearchResult:
     """Result item from similarity search."""
+
     evidence_id: str
     image_url: str
     similarity_score: float
@@ -63,14 +64,14 @@ class ImageSearch:
 
     def get_similarity_threshold(self) -> float:
         """Get similarity threshold from metadata or use default."""
-        if self.metadata and 'threshold' in self.metadata:
-            return float(self.metadata['threshold'])
+        if self.metadata and "threshold" in self.metadata:
+            return float(self.metadata["threshold"])
         return 0.75  # Default threshold
 
     def get_max_results(self) -> int:
         """Get max results from metadata or use default."""
-        if self.metadata and 'max_results' in self.metadata:
-            return int(self.metadata['max_results'])
+        if self.metadata and "max_results" in self.metadata:
+            return int(self.metadata["max_results"])
         return 50  # Default max results
 
     def mark_as_processing(self) -> None:

@@ -38,11 +38,7 @@ class EmbeddingRequestRepository:
 
     async def check_duplicate(self, evidence_id: str) -> bool:
         """Check if evidence already has a processing request."""
-        query = (
-            select(EmbeddingRequest)
-            .where(EmbeddingRequest.evidence_id == evidence_id)
-            .limit(1)
-        )
+        query = select(EmbeddingRequest).where(EmbeddingRequest.evidence_id == evidence_id).limit(1)
         result = await self.session.execute(query)
         return result.scalar() is not None
 
@@ -64,9 +60,7 @@ class EmbeddingRequestRepository:
         await self.session.flush()
         return request
 
-    async def get_stale_working(
-        self, stale_minutes: int = 10
-    ) -> list[EmbeddingRequest]:
+    async def get_stale_working(self, stale_minutes: int = 10) -> list[EmbeddingRequest]:
         """Find requests stuck in WORKING for too long."""
         cutoff = datetime.utcnow() - timedelta(minutes=stale_minutes)
         query = select(EmbeddingRequest).where(
@@ -85,12 +79,16 @@ class EmbeddingRequestRepository:
         """Get count of requests per status."""
         counts = {}
         for name, val in [
-            ("to_work", 1), ("working", 2), ("embedded", 3), ("done", 4), ("error", 5),
+            ("to_work", 1),
+            ("working", 2),
+            ("embedded", 3),
+            ("done", 4),
+            ("error", 5),
         ]:
             result = await self.session.execute(
-                select(func.count()).select_from(EmbeddingRequest).where(
-                    EmbeddingRequest.status == val
-                )
+                select(func.count())
+                .select_from(EmbeddingRequest)
+                .where(EmbeddingRequest.status == val)
             )
             counts[name] = result.scalar()
         return counts

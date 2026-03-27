@@ -8,6 +8,7 @@ from uuid import UUID
 @dataclass
 class EvidenceEmbeddingRequest:
     """Request to embed evidence images."""
+
     evidence_id: UUID
     image_url: str
     camera_id: UUID
@@ -18,6 +19,7 @@ class EvidenceEmbeddingRequest:
 @dataclass
 class EvidenceEmbeddingResponse:
     """Response from evidence embedding."""
+
     evidence_id: UUID
     success: bool
     embedding_id: str | None = None
@@ -29,6 +31,7 @@ class EvidenceEmbeddingResponse:
 @dataclass
 class SearchResultDTO:
     """Search result item."""
+
     evidence_id: str
     image_url: str
     similarity_score: float
@@ -40,6 +43,7 @@ class SearchResultDTO:
 @dataclass
 class ImageSearchRequest:
     """Request to search for similar images."""
+
     search_id: UUID
     user_id: UUID
     image_url: str
@@ -51,6 +55,7 @@ class ImageSearchRequest:
 @dataclass
 class ImageSearchResponse:
     """Response from image search."""
+
     search_id: UUID
     success: bool
     results: list[SearchResultDTO] = field(default_factory=list)
@@ -63,6 +68,7 @@ class ImageSearchResponse:
 @dataclass
 class BatchEmbeddingResult:
     """Result of batch embedding operation."""
+
     total_processed: int
     successful: int
     failed: int

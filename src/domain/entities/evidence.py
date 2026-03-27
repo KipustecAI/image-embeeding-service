@@ -34,7 +34,7 @@ class Evidence:
         """Extract summary from json_data."""
         if not self.json_data:
             return ""
-        return self.json_data.get('summary', "")
+        return self.json_data.get("summary", "")
 
     def get_image_urls(self) -> list[str]:
         """Extract image URLs from json_data."""
@@ -54,7 +54,7 @@ class Evidence:
 
         # Extract crop_evidence_urls from json_data
         if isinstance(data, dict):
-            crop_urls = data.get('crop_evidence_urls', [])
+            crop_urls = data.get("crop_evidence_urls", [])
             if isinstance(crop_urls, list):
                 image_urls.extend(crop_urls)
 

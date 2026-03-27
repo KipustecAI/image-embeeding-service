@@ -51,13 +51,13 @@ class EmbeddingScheduler:
             self.evidence_use_case = EmbedEvidenceImagesUseCase(
                 evidence_repo=self.video_client,
                 vector_repo=self.vector_repo,
-                embedding_service=self.embedder
+                embedding_service=self.embedder,
             )
 
             self.search_use_case = SearchSimilarImagesUseCase(
                 search_repo=self.video_client,
                 vector_repo=self.vector_repo,
-                embedding_service=self.embedder
+                embedding_service=self.embedder,
             )
 
             self.initialized = True
@@ -111,7 +111,7 @@ async def process_evidence_embeddings(ctx: dict[str, Any]) -> dict[str, Any]:
             "total_processed": result.total_processed,
             "successful": result.successful,
             "failed": result.failed,
-            "embedded_ids": result.embedded_ids[:10]  # First 10 for logging
+            "embedded_ids": result.embedded_ids[:10],  # First 10 for logging
         }
 
     except Exception as e:
@@ -119,7 +119,7 @@ async def process_evidence_embeddings(ctx: dict[str, Any]) -> dict[str, Any]:
         return {
             "task": "process_evidence_embeddings",
             "timestamp": start_time.isoformat(),
-            "error": str(e)
+            "error": str(e),
         }
 
 
@@ -157,7 +157,7 @@ async def process_image_searches(ctx: dict[str, Any]) -> dict[str, Any]:
             "total_processed": len(responses),
             "successful": successful,
             "failed": failed,
-            "search_ids": [str(r.search_id) for r in responses[:10]]
+            "search_ids": [str(r.search_id) for r in responses[:10]],
         }
 
     except Exception as e:
@@ -165,7 +165,7 @@ async def process_image_searches(ctx: dict[str, Any]) -> dict[str, Any]:
         return {
             "task": "process_image_searches",
             "timestamp": start_time.isoformat(),
-            "error": str(e)
+            "error": str(e),
         }
 
 
@@ -189,7 +189,7 @@ async def update_vector_statistics(ctx: dict[str, Any]) -> dict[str, Any]:
         return {
             "task": "update_vector_statistics",
             "timestamp": start_time.isoformat(),
-            "stats": stats
+            "stats": stats,
         }
 
     except Exception as e:
@@ -197,7 +197,7 @@ async def update_vector_statistics(ctx: dict[str, Any]) -> dict[str, Any]:
         return {
             "task": "update_vector_statistics",
             "timestamp": start_time.isoformat(),
-            "error": str(e)
+            "error": str(e),
         }
 
 
@@ -215,7 +215,7 @@ async def recalculate_searches(ctx: dict[str, Any]) -> dict[str, Any]:
             "task": "recalculate_searches",
             "timestamp": start_time.isoformat(),
             "skipped": True,
-            "reason": "Recalculation disabled"
+            "reason": "Recalculation disabled",
         }
 
     try:
@@ -225,11 +225,12 @@ async def recalculate_searches(ctx: dict[str, Any]) -> dict[str, Any]:
 
         # Get searches for recalculation based on configured hours_old
         import httpx
+
         async with httpx.AsyncClient(timeout=30) as client:
             url = f"{scheduler.settings.video_server_base_url}/api/v1/internal/image-search/recalculate"
             params = {
                 "limit": scheduler.settings.recalculation_batch_size,
-                "hours_old": scheduler.settings.recalculation_hours_old
+                "hours_old": scheduler.settings.recalculation_hours_old,
             }
             headers = {"X-API-Key": scheduler.settings.video_server_api_key}
 
@@ -245,7 +246,7 @@ async def recalculate_searches(ctx: dict[str, Any]) -> dict[str, Any]:
                 "task": "recalculate_searches",
                 "timestamp": start_time.isoformat(),
                 "total_processed": 0,
-                "message": "No searches need recalculation"
+                "message": "No searches need recalculation",
             }
 
         # Process each search for recalculation
@@ -266,11 +267,15 @@ async def recalculate_searches(ctx: dict[str, Any]) -> dict[str, Any]:
                     search_status=search_data["search_status"],
                     similarity_status=search_data["similarity_status"],
                     created_at=datetime.fromisoformat(search_data["created_at"]),
-                    updated_at=datetime.fromisoformat(search_data["updated_at"]) if search_data.get("updated_at") else None,
-                    processed_at=datetime.fromisoformat(search_data["processed_at"]) if search_data.get("processed_at") else None,
+                    updated_at=datetime.fromisoformat(search_data["updated_at"])
+                    if search_data.get("updated_at")
+                    else None,
+                    processed_at=datetime.fromisoformat(search_data["processed_at"])
+                    if search_data.get("processed_at")
+                    else None,
                     metadata=search_data.get("search_metadata"),
                     results_key=search_data.get("results_key"),
-                    total_matches=search_data.get("total_matches", 0)
+                    total_matches=search_data.get("total_matches", 0),
                 )
 
                 request = ImageSearchRequest(
@@ -279,7 +284,7 @@ async def recalculate_searches(ctx: dict[str, Any]) -> dict[str, Any]:
                     image_url=search.image_url,
                     threshold=search.get_similarity_threshold(),
                     max_results=search.get_max_results(),
-                    metadata=search.metadata
+                    metadata=search.metadata,
                 )
 
                 # Force recalculation
@@ -306,7 +311,7 @@ async def recalculate_searches(ctx: dict[str, Any]) -> dict[str, Any]:
             "total_processed": len(responses),
             "successful": successful,
             "failed": failed,
-            "search_ids": [str(r.search_id) for r in responses[:10]]
+            "search_ids": [str(r.search_id) for r in responses[:10]],
         }
 
     except Exception as e:
@@ -314,7 +319,7 @@ async def recalculate_searches(ctx: dict[str, Any]) -> dict[str, Any]:
         return {
             "task": "recalculate_searches",
             "timestamp": start_time.isoformat(),
-            "error": str(e)
+            "error": str(e),
         }
 
 
@@ -348,9 +353,7 @@ def create_scheduler_settings() -> dict[str, Any]:
             f"{settings.redis_host}:{settings.redis_port}/{settings.redis_database}"
         )
     else:
-        redis_url = (
-            f"redis://{settings.redis_host}:{settings.redis_port}/{settings.redis_database}"
-        )
+        redis_url = f"redis://{settings.redis_host}:{settings.redis_port}/{settings.redis_database}"
 
     redis_settings = RedisSettings.from_dsn(redis_url)
 
@@ -366,7 +369,7 @@ def create_scheduler_settings() -> dict[str, Any]:
                 cron(
                     process_evidence_embeddings,
                     minute=set(range(0, 60, evidence_minutes)),
-                    run_at_startup=True
+                    run_at_startup=True,
                 )
             )
         else:
@@ -376,7 +379,7 @@ def create_scheduler_settings() -> dict[str, Any]:
                 cron(
                     process_evidence_embeddings,
                     minute=set(range(60)),  # Every minute
-                    run_at_startup=True
+                    run_at_startup=True,
                 )
             )
 
@@ -387,7 +390,7 @@ def create_scheduler_settings() -> dict[str, Any]:
             cron(
                 process_image_searches,
                 minute=set(range(60)),  # Every minute
-                run_at_startup=True
+                run_at_startup=True,
             )
         )
 
@@ -396,7 +399,7 @@ def create_scheduler_settings() -> dict[str, Any]:
             cron(
                 update_vector_statistics,
                 minute=0,  # At the start of every hour
-                run_at_startup=True
+                run_at_startup=True,
             )
         )
 
@@ -411,7 +414,7 @@ def create_scheduler_settings() -> dict[str, Any]:
                         recalculate_searches,
                         minute=15,
                         hour=set(range(0, 24, recalc_hours)),
-                        run_at_startup=False  # Don't run at startup
+                        run_at_startup=False,  # Don't run at startup
                     )
                 )
             else:
@@ -420,7 +423,7 @@ def create_scheduler_settings() -> dict[str, Any]:
                     cron(
                         recalculate_searches,
                         minute=set(range(0, 60, recalc_minutes)),
-                        run_at_startup=False  # Don't run at startup
+                        run_at_startup=False,  # Don't run at startup
                     )
                 )
 

@@ -7,9 +7,4 @@ from .interfaces import (
     VectorRepository,
 )
 
-__all__ = [
-    "EvidenceRepository",
-    "ImageSearchRepository",
-    "VectorRepository",
-    "EmbeddingService"
-]
+__all__ = ["EvidenceRepository", "ImageSearchRepository", "VectorRepository", "EmbeddingService"]

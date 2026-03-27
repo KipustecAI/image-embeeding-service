@@ -46,7 +46,9 @@ class SearchRequest(Base):
 
     # Relationships
     matches = relationship(
-        "SearchMatch", back_populates="search_request", cascade="all, delete-orphan",
+        "SearchMatch",
+        back_populates="search_request",
+        cascade="all, delete-orphan",
     )
 
     def __repr__(self):

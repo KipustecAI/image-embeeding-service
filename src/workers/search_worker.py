@@ -24,6 +24,7 @@ class SearchExecutionWorker:
 
     def __init__(self):
         from .embedding_worker import _vector_repo
+
         self.vector_repo = _vector_repo
 
     async def process_batch(self, request_ids: list[str]) -> dict:
@@ -71,7 +72,8 @@ class SearchExecutionWorker:
 
                 total_matches = len(matches)
                 similarity_status = (
-                    SimilarityStatus.MATCHES_FOUND if total_matches > 0
+                    SimilarityStatus.MATCHES_FOUND
+                    if total_matches > 0
                     else SimilarityStatus.NO_MATCHES
                 )
 

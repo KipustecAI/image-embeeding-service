@@ -89,7 +89,7 @@ class CLIPEmbedder(EmbeddingService):
                     images,
                     batch_size=self.settings.clip_batch_size,
                     convert_to_tensor=True,
-                    show_progress_bar=len(images) > 10
+                    show_progress_bar=len(images) > 10,
                 )
                 embeddings_np = embeddings.cpu().numpy()
 
@@ -117,16 +117,16 @@ class CLIPEmbedder(EmbeddingService):
         """Validate if image URL is accessible and processable."""
         try:
             # Check URL format
-            if not image_url.startswith(('http://', 'https://')):
+            if not image_url.startswith(("http://", "https://")):
                 logger.warning(f"Invalid URL format: {image_url}")
                 return False
 
             # Check file extension
             supported_formats = self.settings.supported_formats
             if isinstance(supported_formats, str):
-                supported_formats = supported_formats.split(',')
+                supported_formats = supported_formats.split(",")
 
-            extension = image_url.split('.')[-1].lower().split('?')[0]
+            extension = image_url.split(".")[-1].lower().split("?")[0]
             if extension not in supported_formats:
                 logger.warning(f"Unsupported format {extension} for {image_url}")
                 return False
@@ -146,21 +146,21 @@ class CLIPEmbedder(EmbeddingService):
             if image_url.startswith("file://"):
                 path = image_url[7:]
                 image = Image.open(path)
-                if image.mode != 'RGB':
-                    image = image.convert('RGB')
+                if image.mode != "RGB":
+                    image = image.convert("RGB")
                 return image
 
             response = await self.http_client.get(image_url)
             response.raise_for_status()
 
             # Check content type
-            content_type = response.headers.get('content-type', '').lower()
-            if not content_type.startswith('image/'):
+            content_type = response.headers.get("content-type", "").lower()
+            if not content_type.startswith("image/"):
                 logger.warning(f"Invalid content type {content_type} for {image_url}")
                 return None
 
             # Check size
-            content_length = int(response.headers.get('content-length', 0))
+            content_length = int(response.headers.get("content-length", 0))
             if content_length > self.settings.max_image_size:
                 logger.warning(f"Image too large ({content_length} bytes) for {image_url}")
                 return None
@@ -169,8 +169,8 @@ class CLIPEmbedder(EmbeddingService):
             image = Image.open(BytesIO(response.content))
 
             # Convert to RGB if necessary
-            if image.mode != 'RGB':
-                image = image.convert('RGB')
+            if image.mode != "RGB":
+                image = image.convert("RGB")
 
             return image
 

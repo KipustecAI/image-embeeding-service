@@ -323,7 +323,9 @@ async def get_search(
             "threshold": request.threshold,
             "max_results": request.max_results,
             "created_at": request.created_at.isoformat() if request.created_at else None,
-            "completed_at": request.processing_completed_at.isoformat() if request.processing_completed_at else None,
+            "completed_at": request.processing_completed_at.isoformat()
+            if request.processing_completed_at
+            else None,
             "error": request.error_message,
         }
 
@@ -405,9 +407,7 @@ async def trigger_recalculation(
 
     async with get_session() as session:
         repo = SearchRequestRepository(session)
-        searches = await repo.get_for_recalculation(
-            hours_old=hours_old, limit=limit
-        )
+        searches = await repo.get_for_recalculation(hours_old=hours_old, limit=limit)
 
         if not searches:
             return {"success": True, "message": "No searches eligible", "total": 0, "skipped": 0}
@@ -427,8 +427,7 @@ async def trigger_recalculation(
             filter_conditions = None
             if s.search_metadata:
                 filter_conditions = {
-                    k: v for k, v in s.search_metadata.items()
-                    if k in ("camera_id", "object_type")
+                    k: v for k, v in s.search_metadata.items() if k in ("camera_id", "object_type")
                 }
                 if not filter_conditions:
                     filter_conditions = None
@@ -446,19 +445,20 @@ async def trigger_recalculation(
             )
 
             for match in matches:
-                session.add(SearchMatch(
-                    search_request_id=s.id,
-                    evidence_id=str(match.evidence_id),
-                    camera_id=str(match.camera_id) if match.camera_id else None,
-                    similarity_score=match.similarity_score,
-                    image_url=match.image_url,
-                    match_metadata=match.metadata,
-                ))
+                session.add(
+                    SearchMatch(
+                        search_request_id=s.id,
+                        evidence_id=str(match.evidence_id),
+                        camera_id=str(match.camera_id) if match.camera_id else None,
+                        similarity_score=match.similarity_score,
+                        image_url=match.image_url,
+                        match_metadata=match.metadata,
+                    )
+                )
 
             s.total_matches = len(matches)
             s.similarity_status = (
-                SimilarityStatus.MATCHES_FOUND if matches
-                else SimilarityStatus.NO_MATCHES
+                SimilarityStatus.MATCHES_FOUND if matches else SimilarityStatus.NO_MATCHES
             )
             s.processing_completed_at = datetime.utcnow()
             recalculated += 1

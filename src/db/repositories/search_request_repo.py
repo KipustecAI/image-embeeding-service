@@ -40,11 +40,7 @@ class SearchRequestRepository:
 
     async def check_duplicate(self, search_id: str) -> bool:
         """Check if search already has a processing request."""
-        query = (
-            select(SearchRequest)
-            .where(SearchRequest.search_id == search_id)
-            .limit(1)
-        )
+        query = select(SearchRequest).where(SearchRequest.search_id == search_id).limit(1)
         result = await self.session.execute(query)
         return result.scalar() is not None
 
@@ -72,9 +68,7 @@ class SearchRequestRepository:
         await self.session.flush()
         return request
 
-    async def get_stale_working(
-        self, stale_minutes: int = 10
-    ) -> list[SearchRequest]:
+    async def get_stale_working(self, stale_minutes: int = 10) -> list[SearchRequest]:
         """Find search requests stuck in WORKING for too long."""
         cutoff = datetime.utcnow() - timedelta(minutes=stale_minutes)
         query = select(SearchRequest).where(
@@ -137,9 +131,7 @@ class SearchRequestRepository:
     async def count_by_user_id(self, user_id: str) -> int:
         """Total search count for a user (for pagination)."""
         result = await self.session.execute(
-            select(func.count())
-            .select_from(SearchRequest)
-            .where(SearchRequest.user_id == user_id)
+            select(func.count()).select_from(SearchRequest).where(SearchRequest.user_id == user_id)
         )
         return result.scalar()
 
@@ -169,12 +161,13 @@ class SearchRequestRepository:
         """Get count of search requests per status."""
         counts = {}
         for name, val in [
-            ("to_work", 1), ("working", 2), ("completed", 3), ("error", 4),
+            ("to_work", 1),
+            ("working", 2),
+            ("completed", 3),
+            ("error", 4),
         ]:
             result = await self.session.execute(
-                select(func.count()).select_from(SearchRequest).where(
-                    SearchRequest.status == val
-                )
+                select(func.count()).select_from(SearchRequest).where(SearchRequest.status == val)
             )
             counts[name] = result.scalar()
         return counts
