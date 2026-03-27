@@ -7,8 +7,10 @@ from uuid import UUID
 
 from sqlalchemy import and_, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from ..models.constants import SearchRequestStatus, SimilarityStatus
+from ..models.search_match import SearchMatch
 from ..models.search_request import SearchRequest
 
 logger = logging.getLogger(__name__)
@@ -107,6 +109,62 @@ class SearchRequestRepository:
 
     async def get_by_id(self, request_id: UUID) -> Optional[SearchRequest]:
         return await self.session.get(SearchRequest, request_id)
+
+    async def get_by_search_id(self, search_id: str) -> Optional[SearchRequest]:
+        """Fetch by external search_id with matches eagerly loaded."""
+        query = (
+            select(SearchRequest)
+            .where(SearchRequest.search_id == search_id)
+            .options(selectinload(SearchRequest.matches))
+            .limit(1)
+        )
+        result = await self.session.execute(query)
+        return result.scalar()
+
+    async def get_by_user_id(
+        self, user_id: str, limit: int = 20, offset: int = 0
+    ) -> List[SearchRequest]:
+        """List searches by user, most recent first."""
+        query = (
+            select(SearchRequest)
+            .where(SearchRequest.user_id == user_id)
+            .order_by(SearchRequest.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        result = await self.session.execute(query)
+        return list(result.scalars().all())
+
+    async def count_by_user_id(self, user_id: str) -> int:
+        """Total search count for a user (for pagination)."""
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(SearchRequest)
+            .where(SearchRequest.user_id == user_id)
+        )
+        return result.scalar()
+
+    async def get_matches(
+        self, search_request_id, limit: int = 20, offset: int = 0
+    ) -> List[SearchMatch]:
+        """Get paginated matches for a search, sorted by score descending."""
+        query = (
+            select(SearchMatch)
+            .where(SearchMatch.search_request_id == search_request_id)
+            .order_by(SearchMatch.similarity_score.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        result = await self.session.execute(query)
+        return list(result.scalars().all())
+
+    async def count_matches(self, search_request_id) -> int:
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(SearchMatch)
+            .where(SearchMatch.search_request_id == search_request_id)
+        )
+        return result.scalar()
 
     async def count_by_status(self) -> dict:
         """Get count of search requests per status."""

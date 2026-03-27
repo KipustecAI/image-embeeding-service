@@ -5,6 +5,7 @@ from datetime import datetime
 
 from sqlalchemy import Column, DateTime, Float, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import relationship
 
 from ..base import Base
 
@@ -41,6 +42,11 @@ class SearchRequest(Base):
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    matches = relationship(
+        "SearchMatch", back_populates="search_request", cascade="all, delete-orphan",
+    )
 
     def __repr__(self):
         return f"<SearchRequest {self.id} search={self.search_id} status={self.status}>"

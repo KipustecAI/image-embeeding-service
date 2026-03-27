@@ -39,8 +39,11 @@ class Settings(BaseSettings):
     redis_password: Optional[str] = Field(None, validation_alias="REDIS_PASSWORD")
     redis_database: int = Field(5, validation_alias="REDIS_DATABASE")
 
-    # Redis Streams (consuming output from GPU compute service)
+    # Redis Streams
     redis_streams_db: int = Field(3, validation_alias="REDIS_STREAMS_DB")
+    # Publishing to GPU (input streams)
+    stream_evidence_search: str = Field("evidence:search", validation_alias="STREAM_EVIDENCE_SEARCH")
+    # Consuming from GPU (output streams)
     stream_embeddings_results: str = Field("embeddings:results", validation_alias="STREAM_EMBEDDINGS_RESULTS")
     stream_search_results: str = Field("search:results", validation_alias="STREAM_SEARCH_RESULTS")
     stream_backend_group: str = Field("backend-workers", validation_alias="STREAM_BACKEND_GROUP")

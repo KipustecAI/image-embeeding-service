@@ -23,10 +23,13 @@ from sqlalchemy import text
 
 from src.api.dependencies import verify_api_key
 from src.db.repositories import EmbeddingRequestRepository, SearchRequestRepository
+from pydantic import BaseModel
+
 from src.infrastructure.config import get_settings
 from src.infrastructure.database import engine, get_session
 from src.infrastructure.vector_db.qdrant_repository import QdrantVectorRepository
 from src.services.batch_trigger import get_batch_trigger
+from src.streams.producer import StreamProducer
 from src.services.safety_nets import (
     cleanup_old_requests,
     recover_stale_working,
@@ -56,11 +59,12 @@ scheduler = None
 embed_consumer = None
 search_consumer = None
 vector_repo = None
+stream_producer = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global scheduler, embed_consumer, search_consumer, vector_repo
+    global scheduler, embed_consumer, search_consumer, vector_repo, stream_producer
 
     logger.info("Starting Image Embedding Backend...")
 
@@ -76,7 +80,16 @@ async def lifespan(app: FastAPI):
     set_search_vector_repo(vector_repo)
     logger.info("Qdrant connected")
 
-    # 3. APScheduler — safety nets + periodic tasks
+    # 3. Stream producer (for publishing search requests to GPU)
+    stream_producer = StreamProducer(
+        redis_host=settings.redis_host,
+        redis_port=settings.redis_port,
+        redis_password=settings.redis_password or None,
+        redis_db=settings.redis_streams_db,
+    )
+    logger.info("Stream producer ready")
+
+    # 4. APScheduler — safety nets + periodic tasks
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
         recover_stale_working,
@@ -229,6 +242,148 @@ async def pipeline_status():
             "search": search_consumer.health() if search_consumer else None,
         },
     }
+
+
+# ── Search API ──
+
+STATUS_NAMES = {1: "pending", 2: "working", 3: "completed", 4: "error"}
+SIMILARITY_NAMES = {1: "no_matches", 2: "matches_found"}
+
+
+class SearchCreateRequest(BaseModel):
+    image_url: str
+    user_id: str
+    threshold: float = 0.75
+    max_results: int = 50
+    metadata: Optional[dict] = None
+
+
+@app.post("/api/v1/search", status_code=202)
+async def create_search(
+    body: SearchCreateRequest,
+    _api_key: str = Depends(verify_api_key),
+):
+    """Submit a search — publishes to GPU compute stream, returns search_id."""
+    search_id = str(__import__("uuid").uuid4())
+
+    # Create DB row (status=TO_WORK)
+    async with get_session() as session:
+        repo = SearchRequestRepository(session)
+        await repo.create_request(
+            search_id=search_id,
+            user_id=body.user_id,
+            image_url=body.image_url,
+            threshold=body.threshold,
+            max_results=body.max_results,
+            metadata=body.metadata,
+        )
+
+    # Publish to GPU compute stream
+    stream_producer.publish(
+        stream=settings.stream_evidence_search,
+        event_type="search.created",
+        payload={
+            "search_id": search_id,
+            "user_id": body.user_id,
+            "image_url": body.image_url,
+            "threshold": body.threshold,
+            "max_results": body.max_results,
+            "metadata": body.metadata,
+        },
+    )
+
+    return {
+        "search_id": search_id,
+        "status": "pending",
+        "message": f"Search submitted, check status at /api/v1/search/{search_id}",
+    }
+
+
+@app.get("/api/v1/search/{search_id}")
+async def get_search(
+    search_id: str,
+    _api_key: str = Depends(verify_api_key),
+):
+    """Get search status (no matches inline — use /matches endpoint for results)."""
+    async with get_session() as session:
+        repo = SearchRequestRepository(session)
+        request = await repo.get_by_search_id(search_id)
+
+        if not request:
+            raise HTTPException(status_code=404, detail="Search not found")
+
+        return {
+            "search_id": request.search_id,
+            "user_id": request.user_id,
+            "image_url": request.image_url,
+            "status": STATUS_NAMES.get(request.status, "unknown"),
+            "similarity_status": SIMILARITY_NAMES.get(request.similarity_status, "unknown"),
+            "total_matches": request.total_matches,
+            "threshold": request.threshold,
+            "max_results": request.max_results,
+            "created_at": request.created_at.isoformat() if request.created_at else None,
+            "completed_at": request.processing_completed_at.isoformat() if request.processing_completed_at else None,
+            "error": request.error_message,
+        }
+
+
+@app.get("/api/v1/search/{search_id}/matches")
+async def get_search_matches(
+    search_id: str,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    _api_key: str = Depends(verify_api_key),
+):
+    """Get paginated match results for a search, sorted by similarity score."""
+    async with get_session() as session:
+        repo = SearchRequestRepository(session)
+        request = await repo.get_by_search_id(search_id)
+
+        if not request:
+            raise HTTPException(status_code=404, detail="Search not found")
+
+        matches = await repo.get_matches(request.id, limit=limit, offset=offset)
+        total = await repo.count_matches(request.id)
+
+        return {
+            "search_id": search_id,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "matches": [m.to_dict() for m in matches],
+        }
+
+
+@app.get("/api/v1/search/user/{user_id}")
+async def list_user_searches(
+    user_id: str,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    _api_key: str = Depends(verify_api_key),
+):
+    """List all searches by a user, paginated, most recent first."""
+    async with get_session() as session:
+        repo = SearchRequestRepository(session)
+        searches = await repo.get_by_user_id(user_id, limit=limit, offset=offset)
+        total = await repo.count_by_user_id(user_id)
+
+        return {
+            "user_id": user_id,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "searches": [
+                {
+                    "search_id": s.search_id,
+                    "status": STATUS_NAMES.get(s.status, "unknown"),
+                    "similarity_status": SIMILARITY_NAMES.get(s.similarity_status, "unknown"),
+                    "total_matches": s.total_matches,
+                    "image_url": s.image_url,
+                    "created_at": s.created_at.isoformat() if s.created_at else None,
+                }
+                for s in searches
+            ],
+        }
 
 
 # ── Recalculation ──

@@ -1,6 +1,6 @@
 """Consumer for search:results stream — receives pre-computed query vectors from GPU service.
 
-Executes Qdrant search + stores results directly in the consumer (no ARQ queue needed).
+Executes Qdrant search and stores individual match results in search_matches table.
 """
 
 import asyncio
@@ -9,10 +9,9 @@ from datetime import datetime
 from typing import Dict, Optional
 
 import numpy as np
-from sqlalchemy import update
 
 from ..db.models.constants import SearchRequestStatus, SimilarityStatus
-from ..db.models.search_request import SearchRequest
+from ..db.models.search_match import SearchMatch
 from ..infrastructure.config import get_settings
 from ..infrastructure.database import get_session
 from ..db.repositories import SearchRequestRepository
@@ -22,7 +21,7 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 _event_loop: Optional[asyncio.AbstractEventLoop] = None
-_vector_repo = None  # Set at startup
+_vector_repo = None
 
 
 def set_search_results_event_loop(loop: asyncio.AbstractEventLoop):
@@ -71,7 +70,7 @@ def _handle_compute_error(event_type: str, payload: Dict, message_id: str):
 
 
 async def _process_search_result(payload: Dict, message_id: str):
-    """Receive query vector → search Qdrant → store results directly (no ARQ queue)."""
+    """Receive query vector → search Qdrant → store match results in DB."""
     search_id = payload.get("search_id", "")
     user_id = payload.get("user_id", "")
     vector = payload.get("vector")
@@ -83,13 +82,6 @@ async def _process_search_result(payload: Dict, message_id: str):
     threshold = payload.get("threshold", 0.75)
     max_results = payload.get("max_results", 50)
     search_metadata = payload.get("metadata")
-
-    # Dedup
-    async with get_session() as session:
-        repo = SearchRequestRepository(session)
-        if await repo.check_duplicate(search_id):
-            logger.info(f"Skipping duplicate search {search_id}")
-            return
 
     try:
         query_vector = np.array(vector, dtype=np.float32)
@@ -103,7 +95,7 @@ async def _process_search_result(payload: Dict, message_id: str):
             if "object_type" in search_metadata:
                 filter_conditions["object_type"] = search_metadata["object_type"]
 
-        # Search Qdrant directly
+        # Search Qdrant
         matches = []
         if _vector_repo:
             matches = await _vector_repo.search_similar(
@@ -119,30 +111,53 @@ async def _process_search_result(payload: Dict, message_id: str):
             else SimilarityStatus.NO_MATCHES
         )
 
-        # Create DB row with results
+        # Store everything in one transaction: request + match rows
         async with get_session() as session:
             repo = SearchRequestRepository(session)
-            request = await repo.create_request(
-                search_id=search_id,
-                user_id=user_id,
-                image_url="(computed by GPU service)",
-                threshold=threshold,
-                max_results=max_results,
-                metadata=search_metadata,
-                stream_msg_id=message_id,
-            )
+
+            # Find existing request (created by POST /api/v1/search) or create new one
+            request = await repo.get_by_search_id(search_id)
+
+            if request is None:
+                # Search came from stream (not API) — create the request row
+                request = await repo.create_request(
+                    search_id=search_id,
+                    user_id=user_id,
+                    image_url="(computed by GPU service)",
+                    threshold=threshold,
+                    max_results=max_results,
+                    metadata=search_metadata,
+                    stream_msg_id=message_id,
+                )
+
+            # Update status
             request.status = SearchRequestStatus.COMPLETED
             request.similarity_status = similarity_status
             request.total_matches = total_matches
             request.processing_completed_at = datetime.utcnow()
 
-        logger.info(f"Search {search_id}: {total_matches} matches (threshold={threshold})")
+            # Create SearchMatch rows for each result
+            for match in matches:
+                session.add(SearchMatch(
+                    search_request_id=request.id,
+                    evidence_id=str(match.evidence_id),
+                    camera_id=str(match.camera_id) if match.camera_id else None,
+                    similarity_score=match.similarity_score,
+                    image_url=match.image_url,
+                    match_metadata=match.metadata,
+                ))
+
+        logger.info(f"Search {search_id}: {total_matches} matches stored (threshold={threshold})")
 
     except Exception as e:
         logger.error(f"Failed to process search {search_id}: {e}", exc_info=True)
         async with get_session() as session:
             repo = SearchRequestRepository(session)
-            if not await repo.check_duplicate(search_id):
+            request = await repo.get_by_search_id(search_id)
+            if request:
+                request.status = SearchRequestStatus.ERROR
+                request.error_message = str(e)[:500]
+            else:
                 request = await repo.create_request(
                     search_id=search_id,
                     user_id=user_id,
@@ -163,7 +178,11 @@ async def _process_compute_error(payload: Dict):
 
     async with get_session() as session:
         repo = SearchRequestRepository(session)
-        if not await repo.check_duplicate(entity_id):
+        request = await repo.get_by_search_id(entity_id)
+        if request:
+            request.status = SearchRequestStatus.ERROR
+            request.error_message = f"Compute error: {error}"
+        else:
             request = await repo.create_request(
                 search_id=entity_id,
                 user_id="unknown",
