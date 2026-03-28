@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 
 class StorageUploader:
-    def __init__(self, base_url: str = "http://storage-service:8080"):
+    def __init__(self, base_url: str = "http://storage-service:8006"):
         self.base_url = base_url
         self.upload_url = f"{base_url}/api/v1/upload/file"
 
@@ -17,12 +17,18 @@ class StorageUploader:
         image_bytes: bytes,
         filename: str,
         folder: str,
+        user_id: str = "embedding-service",
     ) -> str | None:
         """Upload image to storage service, return public_url or None on failure."""
         try:
+            headers = {
+                "X-User-Id": user_id,
+                "X-User-Role": "dev",
+            }
             async with httpx.AsyncClient(timeout=30) as client:
                 response = await client.post(
                     self.upload_url,
+                    headers=headers,
                     files={"file": (filename, image_bytes, "image/jpeg")},
                     data={"folder": folder, "storage": "minio"},
                 )

@@ -118,7 +118,9 @@ async def _process_embeddings_result(payload: dict, message_id: str):
                 image_map = await _zip_processor.download_and_extract(zip_url, image_names)
                 folder = f"embeddings/{camera_id}/{evidence_id}"
                 for name, img_bytes in image_map.items():
-                    public_url = await _storage_uploader.upload_image(img_bytes, name, folder)
+                    public_url = await _storage_uploader.upload_image(
+                        img_bytes, name, folder, user_id=user_id or "embedding-service"
+                    )
                     if public_url:
                         uploaded_urls[name] = public_url
 
