@@ -1,19 +1,21 @@
-# Step 3: Backend Service (CPU)
+# Backend Service (CPU) — image-embeeding-service
 
 ## Responsibility
 
-Pipeline orchestration + storage + API. **No CLIP model, no GPU dependency.**
+Pipeline orchestration + storage + Search API. **No CLIP model, no GPU dependency.**
 
 Consumes computed vectors from the GPU service and:
-1. Stores them in Qdrant
+1. Stores them directly in Qdrant (~70ms per upsert)
 2. Records metadata in PostgreSQL
-3. Executes similarity searches
-4. Exposes monitoring API
-5. Runs safety nets and recalculation
+3. Executes similarity searches against Qdrant
+4. Stores individual match results in `search_matches` table
+5. Stores query vectors in `search_queries` Qdrant collection for recalculation
+6. Exposes Search API (submit, status, matches, user searches)
+7. Runs safety nets (stale recovery, recalculation, cleanup)
 
 ## Processing Flows
 
-### Receive Embedding Results
+### Receive Embedding Results (direct storage, no ARQ)
 
 ```
 embeddings:results stream
@@ -22,20 +24,17 @@ embeddings:results stream
        ▼
   StreamConsumer (daemon thread)
        │
-       ├─ Create embedding_request row (status=1) if not exists
-       ├─ BatchTrigger.notify()
-       │       │
-       │       ▼ (flush on count OR timeout)
-       │
-       │  ARQ Worker: store_embeddings_batch
-       │       ├─ Bulk Qdrant upsert (1 call for all vectors)
-       │       ├─ Bulk DB commit (evidence_embedding records)
-       │       └─ Update embedding_request → EMBEDDED
-       │
+       ├─ Create embedding_request row (status=TO_WORK) if not exists
+       ├─ For each embedding:
+       │    ├─ Upsert vector directly to Qdrant (~70ms)
+       │    └─ Create evidence_embedding DB record
+       ├─ Update embedding_request → EMBEDDED
        └─ XACK original message
 ```
 
-### Receive Search Results
+No BatchTrigger. No ARQ queue. The consumer stores vectors inline for speed (~70ms total vs 5-30s with the old ARQ chain).
+
+### Receive Search Results (direct storage, no ARQ)
 
 ```
 search:results stream
@@ -44,17 +43,48 @@ search:results stream
        ▼
   StreamConsumer (daemon thread)
        │
-       ├─ Create search_request row (status=1) if not exists
-       ├─ BatchTrigger.notify()
-       │       │
-       │       ▼ (flush)
-       │
-       │  ARQ Worker: execute_searches_batch
-       │       ├─ For each: query Qdrant with vector + filters
-       │       ├─ Store results (Redis TTL or DB)
-       │       └─ Update search_request → COMPLETED + similarity_status
-       │
+       ├─ Find existing SearchRequest (created by POST API) or create new one
+       ├─ Search Qdrant with pre-computed query vector
+       ├─ Store query vector in search_queries Qdrant collection → get point_id
+       ├─ Save qdrant_query_point_id on SearchRequest
+       ├─ Create SearchMatch rows for each result
+       ├─ Update SearchRequest → COMPLETED + similarity_status
        └─ XACK original message
+```
+
+### Search API Flow
+
+```
+POST /api/v1/search
+       │
+       ├─ Create SearchRequest row (status=TO_WORK)
+       ├─ Publish to evidence:search stream (→ GPU compute)
+       └─ Return 202 { search_id }
+              │
+              ▼
+         GPU compute
+              │ XADD search:results { vector }
+              ▼
+         search_results_consumer (flow above)
+
+GET /api/v1/search/{search_id}          → status + summary
+GET /api/v1/search/{search_id}/matches  → paginated match results
+GET /api/v1/search/user/{user_id}       → paginated user searches
+```
+
+### Recalculation (no GPU needed)
+
+```
+Scheduled job (every 1h) or POST /api/v1/recalculate/searches
+       │
+       ├─ Find completed searches older than N hours
+       ├─ For each with qdrant_query_point_id:
+       │    ├─ Retrieve query vector from search_queries collection (~1ms)
+       │    ├─ Search evidence_embeddings with that vector (~70ms)
+       │    ├─ Delete old SearchMatch rows
+       │    ├─ Insert new SearchMatch rows
+       │    └─ Update totals
+       └─ Searches without stored vectors are skipped (pre-migration)
 ```
 
 ### Handle Compute Errors
@@ -62,189 +92,117 @@ search:results stream
 ```
 embeddings:results / search:results stream
        │
-       │ {event_type: "compute.error", entity_id, error}
+       │ {event_type: "compute.error", entity_id, entity_type, error}
        ▼
   StreamConsumer
        │
        └─ Update DB row → ERROR with error message
 ```
 
-## New Stream Consumers
+## Stream Consumers
 
 ### embedding_results_consumer.py
 
-Replaces the current `evidence_consumer.py` in the backend. Instead of receiving raw images, it receives **pre-computed vectors**:
+Consumes `embeddings:results` from GPU. Stores vectors **directly** in Qdrant + creates DB rows in one flow:
 
 ```python
-async def _process_embedding_result(payload: dict, message_id: str):
-    """Handle computed embeddings from GPU service."""
-
-    # Handle errors from compute
-    if payload.get("event_type") == "compute.error":
-        await _handle_compute_error(payload)
-        return
-
+async def _process_embedding_result(payload, message_id):
     evidence_id = payload["evidence_id"]
     camera_id = payload["camera_id"]
     embeddings = payload["embeddings"]
 
     async with get_session() as session:
         repo = EmbeddingRequestRepository(session)
-
-        # Create or get request row
         if not await repo.check_duplicate(evidence_id):
-            await repo.create_request(
-                evidence_id=evidence_id,
-                camera_id=camera_id,
-                image_urls=[e["image_url"] for e in embeddings],
-                stream_msg_id=message_id,
-            )
+            await repo.create_request(...)
 
-        # Store the pre-computed vectors for the worker to pick up
-        # Option A: store vectors in the DB row (JSONB) for the worker
-        # Option B: store vectors in Redis with TTL
-        # Option C: pass vectors directly via ARQ job args
-        # → Option C is simplest for now
+    # Direct Qdrant upsert — no ARQ queue
+    for emb in embeddings:
+        point_id = str(uuid4())
+        await vector_repo.store_embedding(ImageEmbedding(
+            id=point_id,
+            vector=np.array(emb["vector"]),
+            metadata={...},
+        ))
+        # Create evidence_embedding DB record
+        ...
 
-    trigger = get_batch_trigger("embedding")
-    if trigger:
-        await trigger.notify(count=1)
+    # Update request → EMBEDDED
 ```
 
 ### search_results_consumer.py
 
+Consumes `search:results` from GPU. Searches Qdrant and stores matches + query vector:
+
 ```python
-async def _process_search_result(payload: dict, message_id: str):
-    """Handle computed search vector from GPU service."""
-
-    if payload.get("event_type") == "compute.error":
-        await _handle_compute_error(payload)
-        return
-
+async def _process_search_result(payload, message_id):
     search_id = payload["search_id"]
-    user_id = payload["user_id"]
-    vector = payload["vector"]          # Pre-computed 512-dim
-    threshold = payload.get("threshold", 0.75)
-    max_results = payload.get("max_results", 50)
-    search_metadata = payload.get("metadata")
+    vector = payload["vector"]  # Pre-computed 512-dim
+
+    query_vector = np.array(vector, dtype=np.float32)
+    matches = await vector_repo.search_similar(query_vector, ...)
+
+    # Store query vector for future recalculation
+    query_point_id = str(uuid4())
+    await vector_repo.store_query_vector(query_point_id, query_vector.tolist(), search_id)
 
     async with get_session() as session:
-        repo = SearchRequestRepository(session)
+        request = await repo.get_by_search_id(search_id)
+        request.status = COMPLETED
+        request.qdrant_query_point_id = query_point_id
 
-        if not await repo.check_duplicate(search_id):
-            await repo.create_request(
-                search_id=search_id,
-                user_id=user_id,
-                image_url="(computed by GPU service)",
-                threshold=threshold,
-                max_results=max_results,
-                metadata=search_metadata,
-            )
-
-    trigger = get_batch_trigger("search")
-    if trigger:
-        await trigger.notify(count=1)
+        # Clear old matches (for recalculation case)
+        # Create SearchMatch rows for each result
+        for match in matches:
+            session.add(SearchMatch(...))
 ```
 
-## Simplified Workers
+## API Endpoints
 
-### embedding_storage_worker.py
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/` | No | Service info |
+| GET | `/health` | No | Component health (DB, Qdrant, scheduler, consumers) |
+| GET | `/api/v1/stats` | No | Pipeline counts + Qdrant stats |
+| GET | `/api/v1/pipeline/status` | No | Full status (counts + consumer health) |
+| POST | `/api/v1/search` | Yes | Submit similarity search → 202 |
+| GET | `/api/v1/search/{search_id}` | Yes | Search status (no matches inline) |
+| GET | `/api/v1/search/{search_id}/matches` | Yes | Paginated match results |
+| GET | `/api/v1/search/user/{user_id}` | Yes | List user searches (paginated) |
+| POST | `/api/v1/recalculate/searches` | Yes | Re-search with stored query vectors |
 
-No more CLIP. Just receives vectors and stores them:
+Auth = gateway headers (`X-User-Id`, `X-User-Role`). No API key.
+
+## Lifespan (main.py)
 
 ```python
-class EmbeddingStorageWorker:
-    """Receives pre-computed vectors → bulk Qdrant upsert + DB commit."""
-
-    async def process_batch(self, request_ids: List[str]) -> Dict:
-        # Vectors are already computed — just store them
-
-        all_points = []
-        all_db_records = []
-
-        for rid in request_ids:
-            # Get the vectors (from DB JSONB or Redis cache)
-            vectors_data = await self._get_vectors(rid)
-
-            for emb in vectors_data:
-                point_id = str(uuid4())
-                all_points.append(PointStruct(
-                    id=point_id,
-                    vector=emb["vector"],
-                    payload={
-                        "evidence_id": emb["evidence_id"],
-                        "camera_id": emb["camera_id"],
-                        "image_url": emb["image_url"],
-                        "image_index": emb["image_index"],
-                        "source_type": "evidence",
-                    }
-                ))
-                all_db_records.append(EvidenceEmbeddingRecord(
-                    request_id=UUID(rid),
-                    qdrant_point_id=point_id,
-                    image_index=emb["image_index"],
-                    image_url=emb["image_url"],
-                ))
-
-        # Single Qdrant upsert
-        if all_points:
-            await self.vector_repo.store_embeddings_batch(all_points)
-
-        # Single DB commit
-        if all_db_records:
-            async with get_session() as session:
-                session.add_all(all_db_records)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 1. Verify PostgreSQL connection
+    # 2. Initialize Qdrant (evidence_embeddings + search_queries collections)
+    #    Set vector_repo for both consumers and safety_nets
+    # 3. Create StreamProducer (for publishing search requests to GPU)
+    # 4. Start APScheduler:
+    #    - recover_stale_working (every 5m)
+    #    - recalculate_searches (every 1h)
+    #    - cleanup_old_requests (every 24h)
+    # 5. Start stream consumers:
+    #    - embedding_results_consumer (embeddings:results)
+    #    - search_results_consumer (search:results)
 ```
 
-### search_execution_worker.py
+No ARQ pool. No BatchTrigger. Single process handles everything.
 
-Receives pre-computed query vector, searches Qdrant:
-
-```python
-class SearchExecutionWorker:
-    """Receives pre-computed query vector → Qdrant search → store results."""
-
-    async def process_batch(self, request_ids: List[str]) -> Dict:
-        for rid in request_ids:
-            vector_data = await self._get_vector(rid)
-
-            matches = await self.vector_repo.search_similar(
-                query_vector=np.array(vector_data["vector"]),
-                limit=vector_data["max_results"],
-                threshold=vector_data["threshold"],
-                filter_conditions=vector_data.get("filters"),
-            )
-
-            # Update DB
-            async with get_session() as session:
-                stmt = update(SearchRequest)...
-```
-
-## What's Removed from Backend
+## What's Not in Backend
 
 | Removed | Reason |
 |---------|--------|
 | `torch`, `sentence-transformers` | No CLIP inference |
 | `opencv-python-headless` | No diversity filter |
-| `clip_embedder.py` | Moved to compute service |
-| `diversity_filter.py` | Moved to compute service |
-| Image download logic | Compute service handles it |
 | `Pillow` | No image processing |
-
-## Lifespan Changes
-
-```python
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # 1. PostgreSQL ✓ (same)
-    # 2. ARQ pool ✓ (same)
-    # 3. APScheduler safety nets ✓ (same)
-    # 4. Batch triggers ✓ (same)
-    # 5. Stream consumers:
-    #    OLD: evidence:embed + evidence:search (raw events)
-    #    NEW: embeddings:results + search:results (pre-computed vectors)
-    results_consumer = create_embedding_results_consumer()
-    results_consumer.start()
-    search_results_consumer = create_search_results_consumer()
-    search_results_consumer.start()
-```
+| CLIP embedder | Moved to compute service |
+| Diversity filter | Moved to compute service |
+| Image download logic | Compute service handles it |
+| ARQ queue (happy path) | Consumers store directly |
+| BatchTrigger (happy path) | Not needed with direct storage |
+| API key auth | Replaced by gateway headers |
