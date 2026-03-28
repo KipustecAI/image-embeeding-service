@@ -5,7 +5,6 @@ No CLIP model. No image downloading. Just vector search.
 
 import logging
 from datetime import datetime
-from typing import Dict, List
 from uuid import UUID
 
 import numpy as np
@@ -15,7 +14,7 @@ from ..db.models.constants import SearchRequestStatus, SimilarityStatus
 from ..db.models.search_request import SearchRequest
 from ..infrastructure.config import get_settings
 from ..infrastructure.database import get_session
-from ..infrastructure.vector_db.qdrant_repository import QdrantVectorRepository
+
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
@@ -25,9 +24,10 @@ class SearchExecutionWorker:
 
     def __init__(self):
         from .embedding_worker import _vector_repo
+
         self.vector_repo = _vector_repo
 
-    async def process_batch(self, request_ids: List[str]) -> Dict:
+    async def process_batch(self, request_ids: list[str]) -> dict:
         succeeded = 0
         failed = 0
 
@@ -40,7 +40,6 @@ class SearchExecutionWorker:
                         await self._mark_error(rid, "Request not found")
                         failed += 1
                         continue
-                    search_id = request.search_id
 
                 # Get pre-computed vector from DB
                 vector_data = request.vector_data
@@ -73,7 +72,8 @@ class SearchExecutionWorker:
 
                 total_matches = len(matches)
                 similarity_status = (
-                    SimilarityStatus.MATCHES_FOUND if total_matches > 0
+                    SimilarityStatus.MATCHES_FOUND
+                    if total_matches > 0
                     else SimilarityStatus.NO_MATCHES
                 )
 
@@ -114,7 +114,7 @@ class SearchExecutionWorker:
             )
 
 
-async def process_image_searches_batch(ctx: Dict, request_ids: List[str]) -> Dict:
+async def process_image_searches_batch(ctx: dict, request_ids: list[str]) -> dict:
     """ARQ-registered task for batch search execution."""
     worker = SearchExecutionWorker()
     return await worker.process_batch(request_ids)

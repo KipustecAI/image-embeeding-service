@@ -160,6 +160,8 @@ curl "http://localhost:8001/api/v1/search/user/550e8400-e29b-41d4-a716-446655440
 
 ## Recalculate Searches
 
+Re-runs completed searches against the current Qdrant state using stored query vectors (no GPU needed, ~100ms per search).
+
 ```bash
 # Recalculate up to 20 searches older than 2 hours
 curl -X POST "http://localhost:8001/api/v1/recalculate/searches" \
@@ -170,6 +172,19 @@ curl -X POST "http://localhost:8001/api/v1/recalculate/searches" \
 curl -X POST "http://localhost:8001/api/v1/recalculate/searches?limit=50&hours_old=1" \
   -H "X-User-Id: admin-user-001" \
   -H "X-User-Role: admin"
+
+# Recalculate ALL completed searches (including recent ones)
+curl -X POST "http://localhost:8001/api/v1/recalculate/searches?hours_old=0&limit=100" \
+  -H "X-User-Id: admin-user-001" \
+  -H "X-User-Role: admin"
+
+# Response:
+# {
+#   "success": true,
+#   "message": "Recalculated 3 searches (2 skipped — no stored vector)",
+#   "total": 3,
+#   "skipped": 2
+# }
 ```
 
 ---

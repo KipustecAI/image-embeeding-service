@@ -9,7 +9,7 @@ Adopted from deepface-restapi BatchTrigger pattern.
 
 import asyncio
 import logging
-from typing import Awaitable, Callable, Dict, Optional
+from collections.abc import Awaitable, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ class BatchTrigger:
         name: str = "default",
         batch_size: int = 20,
         max_wait_seconds: float = 10.0,
-        process_callback: Optional[Callable[[], Awaitable[None]]] = None,
+        process_callback: Callable[[], Awaitable[None]] | None = None,
     ):
         self.name = name
         self.batch_size = batch_size
@@ -28,15 +28,15 @@ class BatchTrigger:
         self.process_callback = process_callback
 
         self._pending_count = 0
-        self._first_event_time: Optional[float] = None
-        self._timeout_task: Optional[asyncio.Task] = None
+        self._first_event_time: float | None = None
+        self._timeout_task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
         self._running = False
 
         # Metrics
         self._total_flushes = 0
         self._total_events = 0
-        self._flush_reasons: Dict[str, int] = {
+        self._flush_reasons: dict[str, int] = {
             "batch_full": 0,
             "timeout": 0,
             "manual": 0,
@@ -111,9 +111,7 @@ class BatchTrigger:
             "pending_count": self._pending_count,
             "batch_size": self.batch_size,
             "max_wait_seconds": self.max_wait_seconds,
-            "has_active_timer": (
-                self._timeout_task is not None and not self._timeout_task.done()
-            ),
+            "has_active_timer": (self._timeout_task is not None and not self._timeout_task.done()),
             "total_flushes": self._total_flushes,
             "total_events": self._total_events,
             "flush_reasons": self._flush_reasons,
@@ -122,7 +120,7 @@ class BatchTrigger:
 
 # ── Global Registry ──
 
-_triggers: Dict[str, BatchTrigger] = {}
+_triggers: dict[str, BatchTrigger] = {}
 
 
 def create_batch_trigger(name: str, **kwargs) -> BatchTrigger:
@@ -131,5 +129,5 @@ def create_batch_trigger(name: str, **kwargs) -> BatchTrigger:
     return trigger
 
 
-def get_batch_trigger(name: str) -> Optional[BatchTrigger]:
+def get_batch_trigger(name: str) -> BatchTrigger | None:
     return _triggers.get(name)

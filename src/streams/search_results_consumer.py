@@ -5,22 +5,22 @@ Executes Qdrant search and stores individual match results in search_matches tab
 
 import asyncio
 import logging
+import uuid as uuid_mod
 from datetime import datetime
-from typing import Dict, Optional
 
 import numpy as np
 
 from ..db.models.constants import SearchRequestStatus, SimilarityStatus
 from ..db.models.search_match import SearchMatch
+from ..db.repositories import SearchRequestRepository
 from ..infrastructure.config import get_settings
 from ..infrastructure.database import get_session
-from ..db.repositories import SearchRequestRepository
 from .consumer import StreamConsumer
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-_event_loop: Optional[asyncio.AbstractEventLoop] = None
+_event_loop: asyncio.AbstractEventLoop | None = None
 _vector_repo = None
 
 
@@ -53,7 +53,7 @@ def create_search_results_consumer() -> StreamConsumer:
     return consumer
 
 
-def _handle_search_computed(event_type: str, payload: Dict, message_id: str):
+def _handle_search_computed(event_type: str, payload: dict, message_id: str):
     future = asyncio.run_coroutine_threadsafe(
         _process_search_result(payload, message_id),
         _event_loop,
@@ -61,7 +61,7 @@ def _handle_search_computed(event_type: str, payload: Dict, message_id: str):
     future.result(timeout=120)
 
 
-def _handle_compute_error(event_type: str, payload: Dict, message_id: str):
+def _handle_compute_error(event_type: str, payload: dict, message_id: str):
     future = asyncio.run_coroutine_threadsafe(
         _process_compute_error(payload),
         _event_loop,
@@ -69,7 +69,7 @@ def _handle_compute_error(event_type: str, payload: Dict, message_id: str):
     future.result(timeout=30)
 
 
-async def _process_search_result(payload: Dict, message_id: str):
+async def _process_search_result(payload: dict, message_id: str):
     """Receive query vector → search Qdrant → store match results in DB."""
     search_id = payload.get("search_id", "")
     user_id = payload.get("user_id", "")
@@ -107,9 +107,17 @@ async def _process_search_result(payload: Dict, message_id: str):
 
         total_matches = len(matches)
         similarity_status = (
-            SimilarityStatus.MATCHES_FOUND if total_matches > 0
-            else SimilarityStatus.NO_MATCHES
+            SimilarityStatus.MATCHES_FOUND if total_matches > 0 else SimilarityStatus.NO_MATCHES
         )
+
+        # Store query vector in Qdrant for future recalculation
+        query_point_id = str(uuid_mod.uuid4())
+        if _vector_repo:
+            await _vector_repo.store_query_vector(
+                point_id=query_point_id,
+                vector=query_vector.tolist(),
+                search_id=search_id,
+            )
 
         # Store everything in one transaction: request + match rows
         async with get_session() as session:
@@ -135,17 +143,25 @@ async def _process_search_result(payload: Dict, message_id: str):
             request.similarity_status = similarity_status
             request.total_matches = total_matches
             request.processing_completed_at = datetime.utcnow()
+            request.qdrant_query_point_id = query_point_id
+
+            # Clear old matches if this is a recalculation
+            if request.matches:
+                request.matches.clear()
+                await session.flush()
 
             # Create SearchMatch rows for each result
             for match in matches:
-                session.add(SearchMatch(
-                    search_request_id=request.id,
-                    evidence_id=str(match.evidence_id),
-                    camera_id=str(match.camera_id) if match.camera_id else None,
-                    similarity_score=match.similarity_score,
-                    image_url=match.image_url,
-                    match_metadata=match.metadata,
-                ))
+                session.add(
+                    SearchMatch(
+                        search_request_id=request.id,
+                        evidence_id=str(match.evidence_id),
+                        camera_id=str(match.camera_id) if match.camera_id else None,
+                        similarity_score=match.similarity_score,
+                        image_url=match.image_url,
+                        match_metadata=match.metadata,
+                    )
+                )
 
         logger.info(f"Search {search_id}: {total_matches} matches stored (threshold={threshold})")
 
@@ -168,7 +184,7 @@ async def _process_search_result(payload: Dict, message_id: str):
                 request.error_message = str(e)[:500]
 
 
-async def _process_compute_error(payload: Dict):
+async def _process_compute_error(payload: dict):
     entity_id = payload.get("entity_id", "")
     entity_type = payload.get("entity_type", "")
     error = payload.get("error", "Unknown compute error")

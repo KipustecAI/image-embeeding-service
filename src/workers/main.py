@@ -1,14 +1,14 @@
 """ARQ worker settings — storage workers only, no CLIP."""
 
 import logging
-from typing import Any, Dict
+from typing import Any
 
 from arq.connections import RedisSettings
 
 from ..infrastructure.config import get_settings
 from .embedding_worker import (
-    initialize_worker,
     cleanup_worker,
+    initialize_worker,
     process_evidence_embeddings_batch,
 )
 from .search_worker import process_image_searches_batch
@@ -29,7 +29,7 @@ def get_redis_settings() -> RedisSettings:
     )
 
 
-async def startup(ctx: Dict[str, Any]) -> None:
+async def startup(ctx: dict[str, Any]) -> None:
     """Initialize Qdrant client on worker startup. No CLIP model needed."""
     logging.basicConfig(
         level=logging.INFO,
@@ -39,7 +39,7 @@ async def startup(ctx: Dict[str, Any]) -> None:
     logger.info("ARQ Storage Worker ready (Qdrant connected, no GPU)")
 
 
-async def shutdown(ctx: Dict[str, Any]) -> None:
+async def shutdown(ctx: dict[str, Any]) -> None:
     await cleanup_worker()
     logger.info("ARQ Storage Worker shut down")
 
@@ -56,7 +56,7 @@ class WorkerSettings:
     keep_result = 3600
     max_tries = 3
     retry_delay = 5
-    poll_delay = 0.5          # Check for new jobs every 0.5s (was effectively 30s)
+    poll_delay = 0.5  # Check for new jobs every 0.5s (was effectively 30s)
     health_check_interval = 30
 
     on_startup = startup

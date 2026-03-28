@@ -2,10 +2,9 @@
 
 import logging
 from datetime import datetime, timedelta
-from typing import List, Optional
 from uuid import UUID
 
-from sqlalchemy import and_, select, func
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.constants import EmbeddingRequestStatus
@@ -20,7 +19,7 @@ class EmbeddingRequestRepository:
 
     async def get_pending_requests(
         self, limit: int = 20, max_retries: int = 3
-    ) -> List[EmbeddingRequest]:
+    ) -> list[EmbeddingRequest]:
         """Get TO_WORK requests with FOR UPDATE SKIP LOCKED to prevent double-pickup."""
         query = (
             select(EmbeddingRequest)
@@ -39,11 +38,7 @@ class EmbeddingRequestRepository:
 
     async def check_duplicate(self, evidence_id: str) -> bool:
         """Check if evidence already has a processing request."""
-        query = (
-            select(EmbeddingRequest)
-            .where(EmbeddingRequest.evidence_id == evidence_id)
-            .limit(1)
-        )
+        query = select(EmbeddingRequest).where(EmbeddingRequest.evidence_id == evidence_id).limit(1)
         result = await self.session.execute(query)
         return result.scalar() is not None
 
@@ -52,7 +47,7 @@ class EmbeddingRequestRepository:
         evidence_id: str,
         camera_id: str,
         image_urls: list,
-        stream_msg_id: Optional[str] = None,
+        stream_msg_id: str | None = None,
     ) -> EmbeddingRequest:
         """Create new embedding request at status=1."""
         request = EmbeddingRequest(
@@ -65,9 +60,7 @@ class EmbeddingRequestRepository:
         await self.session.flush()
         return request
 
-    async def get_stale_working(
-        self, stale_minutes: int = 10
-    ) -> List[EmbeddingRequest]:
+    async def get_stale_working(self, stale_minutes: int = 10) -> list[EmbeddingRequest]:
         """Find requests stuck in WORKING for too long."""
         cutoff = datetime.utcnow() - timedelta(minutes=stale_minutes)
         query = select(EmbeddingRequest).where(
@@ -79,19 +72,23 @@ class EmbeddingRequestRepository:
         result = await self.session.execute(query)
         return list(result.scalars().all())
 
-    async def get_by_id(self, request_id: UUID) -> Optional[EmbeddingRequest]:
+    async def get_by_id(self, request_id: UUID) -> EmbeddingRequest | None:
         return await self.session.get(EmbeddingRequest, request_id)
 
     async def count_by_status(self) -> dict:
         """Get count of requests per status."""
         counts = {}
         for name, val in [
-            ("to_work", 1), ("working", 2), ("embedded", 3), ("done", 4), ("error", 5),
+            ("to_work", 1),
+            ("working", 2),
+            ("embedded", 3),
+            ("done", 4),
+            ("error", 5),
         ]:
             result = await self.session.execute(
-                select(func.count()).select_from(EmbeddingRequest).where(
-                    EmbeddingRequest.status == val
-                )
+                select(func.count())
+                .select_from(EmbeddingRequest)
+                .where(EmbeddingRequest.status == val)
             )
             counts[name] = result.scalar()
         return counts

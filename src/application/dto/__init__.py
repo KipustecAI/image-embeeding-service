@@ -1,12 +1,12 @@
 """Application DTOs."""
 
 from .embedding_dto import (
+    BatchEmbeddingResult,
     EvidenceEmbeddingRequest,
     EvidenceEmbeddingResponse,
     ImageSearchRequest,
     ImageSearchResponse,
     SearchResultDTO,
-    BatchEmbeddingResult
 )
 
 __all__ = [
@@ -15,5 +15,5 @@ __all__ = [
     "ImageSearchRequest",
     "ImageSearchResponse",
     "SearchResultDTO",
-    "BatchEmbeddingResult"
+    "BatchEmbeddingResult",
 ]

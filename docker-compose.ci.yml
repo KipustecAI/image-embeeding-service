@@ -1,0 +1,92 @@
+services:
+  # --- Infrastructure ---
+
+  ci-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: embedding_test_db
+      POSTGRES_USER: test_user
+      POSTGRES_PASSWORD: test_pass
+    ports:
+      - "5433:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test_user -d embedding_test_db"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  ci-redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  ci-qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6335:6333"
+    tmpfs:
+      - /qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:6333/readyz || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  # --- CI Jobs ---
+
+  ci-lint:
+    build:
+      context: .
+      dockerfile: Dockerfile.ci
+    command: sh -c "ruff check src/ tests/ && ruff format --check src/ tests/"
+
+  ci-test:
+    build:
+      context: .
+      dockerfile: Dockerfile.ci
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://test_user:test_pass@ci-postgres:5432/embedding_test_db"
+      REDIS_HOST: ci-redis
+      REDIS_PORT: "6379"
+      QDRANT_HOST: ci-qdrant
+      QDRANT_PORT: "6333"
+      ENVIRONMENT: development
+    depends_on:
+      ci-postgres:
+        condition: service_healthy
+      ci-redis:
+        condition: service_healthy
+      ci-qdrant:
+        condition: service_healthy
+    command: >
+      pytest tests/test_db.py -v --tb=short
+      --cov=src --cov-report=term-missing --cov-report=xml
+
+  ci-migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.ci
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://test_user:test_pass@ci-postgres:5432/embedding_test_db"
+    depends_on:
+      ci-postgres:
+        condition: service_healthy
+    command: >
+      sh -c "
+        echo '=== Upgrade to head ===' &&
+        alembic upgrade head &&
+        echo '=== Downgrade to base ===' &&
+        alembic downgrade base &&
+        echo '=== Re-upgrade to head ===' &&
+        alembic upgrade head &&
+        echo '=== Check single head ===' &&
+        alembic heads | wc -l | grep -q '1' &&
+        echo '✓ All migration checks passed'
+      "

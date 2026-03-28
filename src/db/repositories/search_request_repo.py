@@ -2,10 +2,9 @@
 
 import logging
 from datetime import datetime, timedelta
-from typing import List, Optional
 from uuid import UUID
 
-from sqlalchemy import and_, select, func
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -22,7 +21,7 @@ class SearchRequestRepository:
 
     async def get_pending_requests(
         self, limit: int = 10, max_retries: int = 3
-    ) -> List[SearchRequest]:
+    ) -> list[SearchRequest]:
         """Get TO_WORK search requests with FOR UPDATE SKIP LOCKED."""
         query = (
             select(SearchRequest)
@@ -41,11 +40,7 @@ class SearchRequestRepository:
 
     async def check_duplicate(self, search_id: str) -> bool:
         """Check if search already has a processing request."""
-        query = (
-            select(SearchRequest)
-            .where(SearchRequest.search_id == search_id)
-            .limit(1)
-        )
+        query = select(SearchRequest).where(SearchRequest.search_id == search_id).limit(1)
         result = await self.session.execute(query)
         return result.scalar() is not None
 
@@ -56,8 +51,8 @@ class SearchRequestRepository:
         image_url: str,
         threshold: float = 0.75,
         max_results: int = 50,
-        metadata: Optional[dict] = None,
-        stream_msg_id: Optional[str] = None,
+        metadata: dict | None = None,
+        stream_msg_id: str | None = None,
     ) -> SearchRequest:
         """Create new search request at status=1."""
         request = SearchRequest(
@@ -73,9 +68,7 @@ class SearchRequestRepository:
         await self.session.flush()
         return request
 
-    async def get_stale_working(
-        self, stale_minutes: int = 10
-    ) -> List[SearchRequest]:
+    async def get_stale_working(self, stale_minutes: int = 10) -> list[SearchRequest]:
         """Find search requests stuck in WORKING for too long."""
         cutoff = datetime.utcnow() - timedelta(minutes=stale_minutes)
         query = select(SearchRequest).where(
@@ -89,7 +82,7 @@ class SearchRequestRepository:
 
     async def get_for_recalculation(
         self, hours_old: int = 2, limit: int = 20
-    ) -> List[SearchRequest]:
+    ) -> list[SearchRequest]:
         """Get completed searches eligible for recalculation."""
         cutoff = datetime.utcnow() - timedelta(hours=hours_old)
         query = (
@@ -107,10 +100,10 @@ class SearchRequestRepository:
         result = await self.session.execute(query)
         return list(result.scalars().all())
 
-    async def get_by_id(self, request_id: UUID) -> Optional[SearchRequest]:
+    async def get_by_id(self, request_id: UUID) -> SearchRequest | None:
         return await self.session.get(SearchRequest, request_id)
 
-    async def get_by_search_id(self, search_id: str) -> Optional[SearchRequest]:
+    async def get_by_search_id(self, search_id: str) -> SearchRequest | None:
         """Fetch by external search_id with matches eagerly loaded."""
         query = (
             select(SearchRequest)
@@ -123,7 +116,7 @@ class SearchRequestRepository:
 
     async def get_by_user_id(
         self, user_id: str, limit: int = 20, offset: int = 0
-    ) -> List[SearchRequest]:
+    ) -> list[SearchRequest]:
         """List searches by user, most recent first."""
         query = (
             select(SearchRequest)
@@ -138,15 +131,13 @@ class SearchRequestRepository:
     async def count_by_user_id(self, user_id: str) -> int:
         """Total search count for a user (for pagination)."""
         result = await self.session.execute(
-            select(func.count())
-            .select_from(SearchRequest)
-            .where(SearchRequest.user_id == user_id)
+            select(func.count()).select_from(SearchRequest).where(SearchRequest.user_id == user_id)
         )
         return result.scalar()
 
     async def get_matches(
         self, search_request_id, limit: int = 20, offset: int = 0
-    ) -> List[SearchMatch]:
+    ) -> list[SearchMatch]:
         """Get paginated matches for a search, sorted by score descending."""
         query = (
             select(SearchMatch)
@@ -170,12 +161,13 @@ class SearchRequestRepository:
         """Get count of search requests per status."""
         counts = {}
         for name, val in [
-            ("to_work", 1), ("working", 2), ("completed", 3), ("error", 4),
+            ("to_work", 1),
+            ("working", 2),
+            ("completed", 3),
+            ("error", 4),
         ]:
             result = await self.session.execute(
-                select(func.count()).select_from(SearchRequest).where(
-                    SearchRequest.status == val
-                )
+                select(func.count()).select_from(SearchRequest).where(SearchRequest.status == val)
             )
             counts[name] = result.scalar()
         return counts

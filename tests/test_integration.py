@@ -1,9 +1,9 @@
 """Integration tests: embed local images → search → verify matches.
 
 Uses data/inputs/ as evidence images and data/request/ as search queries.
-Requires: PostgreSQL, Qdrant, and Redis running (make docker-up).
+Requires: PostgreSQL, Qdrant, Redis, CLIP model, and local test images.
 
-Run:
+Run locally (NOT in CI — these are skipped automatically):
   source ~/anaconda3/etc/profile.d/conda.sh && conda activate clip_p11
   pytest tests/test_integration.py -v -s
 """
@@ -13,9 +13,14 @@ import os
 from pathlib import Path
 from uuid import uuid4
 
-import numpy as np
 import pytest
 import pytest_asyncio
+
+# Auto-skip entire module if CLIP dependencies are missing
+np = pytest.importorskip("numpy", reason="numpy not available (CLIP dependency)")
+pytest.importorskip(
+    "sentence_transformers", reason="sentence-transformers not available — skip CLIP tests"
+)
 
 # ── Paths ──
 PROJECT_DIR = Path(__file__).parent.parent
@@ -36,6 +41,7 @@ def event_loop():
 @pytest_asyncio.fixture(scope="session")
 async def settings():
     from src.infrastructure.config import get_settings
+
     s = get_settings()
     return s
 
@@ -43,6 +49,7 @@ async def settings():
 @pytest_asyncio.fixture(scope="session")
 async def embedder(settings):
     from src.infrastructure.embedding.clip_embedder import CLIPEmbedder
+
     clip = CLIPEmbedder(settings)
     await clip.initialize()
     yield clip
@@ -52,6 +59,7 @@ async def embedder(settings):
 @pytest_asyncio.fixture(scope="session")
 async def vector_repo(settings):
     from src.infrastructure.vector_db.qdrant_repository import QdrantVectorRepository
+
     repo = QdrantVectorRepository(settings)
     # Override collection name for test isolation
     repo.collection_name = TEST_COLLECTION
@@ -67,6 +75,7 @@ async def vector_repo(settings):
 @pytest_asyncio.fixture(scope="session")
 async def db_session():
     from src.infrastructure.database import get_session
+
     async with get_session() as session:
         yield session
 
@@ -75,20 +84,26 @@ def get_input_images():
     """Get list of image file paths from data/inputs/."""
     if not INPUT_DIR.exists():
         return []
-    return sorted([
-        str(p) for p in INPUT_DIR.iterdir()
-        if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")
-    ])
+    return sorted(
+        [
+            str(p)
+            for p in INPUT_DIR.iterdir()
+            if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")
+        ]
+    )
 
 
 def get_request_images():
     """Get list of image file paths from data/request/."""
     if not REQUEST_DIR.exists():
         return []
-    return sorted([
-        str(p) for p in REQUEST_DIR.iterdir()
-        if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")
-    ])
+    return sorted(
+        [
+            str(p)
+            for p in REQUEST_DIR.iterdir()
+            if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")
+        ]
+    )
 
 
 # ── Tests ──
@@ -254,7 +269,9 @@ class TestQdrantStorage:
         # Best match should be very high similarity (same image)
         best_score = results[0].similarity_score
         print(f"\n  Best match score: {best_score:.4f}")
-        assert best_score > 0.8, f"Expected high similarity for identical image, got {best_score:.4f}"
+        assert best_score > 0.8, (
+            f"Expected high similarity for identical image, got {best_score:.4f}"
+        )
 
     @pytest.mark.asyncio
     async def test_search_with_threshold_filtering(self, embedder, vector_repo):
@@ -264,10 +281,14 @@ class TestQdrantStorage:
         assert query_vector is not None
 
         results_low = await vector_repo.search_similar(
-            query_vector=query_vector, limit=50, threshold=0.3,
+            query_vector=query_vector,
+            limit=50,
+            threshold=0.3,
         )
         results_high = await vector_repo.search_similar(
-            query_vector=query_vector, limit=50, threshold=0.9,
+            query_vector=query_vector,
+            limit=50,
+            threshold=0.9,
         )
 
         print(f"\n  threshold=0.3: {len(results_low)} results")
@@ -328,7 +349,10 @@ class TestDiversityFilter:
 
         # Very high min dimension — should reject small crops
         f = DiversityFilter(
-            threshold=0.10, min_dimension=2000, max_images=10, min_images=0,
+            threshold=0.10,
+            min_dimension=2000,
+            max_images=10,
+            min_images=0,
         )
         filtered = await f.filter_image_urls(urls)
 
@@ -337,92 +361,4 @@ class TestDiversityFilter:
         assert len(filtered) < len(urls), "High min_dimension should reject some images"
 
 
-class TestDatabaseModels:
-    """Test DB model creation and repository queries."""
-
-    @pytest.mark.asyncio
-    async def test_create_embedding_request(self):
-        from src.infrastructure.database import get_session
-        from src.db.repositories import EmbeddingRequestRepository
-
-        async with get_session() as session:
-            repo = EmbeddingRequestRepository(session)
-            request = await repo.create_request(
-                evidence_id=f"test-{uuid4()}",
-                camera_id=str(uuid4()),
-                image_urls=["file:///test/img1.jpg", "file:///test/img2.jpg"],
-                stream_msg_id="test-msg-001",
-            )
-            assert request.id is not None
-            assert request.status == 1  # TO_WORK
-
-        # Verify persisted
-        async with get_session() as session:
-            repo = EmbeddingRequestRepository(session)
-            found = await repo.get_by_id(request.id)
-            assert found is not None
-            assert found.evidence_id == request.evidence_id
-
-    @pytest.mark.asyncio
-    async def test_create_search_request(self):
-        from src.infrastructure.database import get_session
-        from src.db.repositories import SearchRequestRepository
-
-        async with get_session() as session:
-            repo = SearchRequestRepository(session)
-            request = await repo.create_request(
-                search_id=f"search-{uuid4()}",
-                user_id=str(uuid4()),
-                image_url="file:///test/query.jpg",
-                threshold=0.8,
-                max_results=25,
-                metadata={"camera_id": "cam-001"},
-            )
-            assert request.id is not None
-            assert request.status == 1
-
-    @pytest.mark.asyncio
-    async def test_dedup_check(self):
-        from src.infrastructure.database import get_session
-        from src.db.repositories import EmbeddingRequestRepository
-
-        evidence_id = f"dedup-test-{uuid4()}"
-
-        async with get_session() as session:
-            repo = EmbeddingRequestRepository(session)
-            assert await repo.check_duplicate(evidence_id) is False
-
-            await repo.create_request(
-                evidence_id=evidence_id,
-                camera_id="cam-1",
-                image_urls=["file:///test/img.jpg"],
-            )
-
-        async with get_session() as session:
-            repo = EmbeddingRequestRepository(session)
-            assert await repo.check_duplicate(evidence_id) is True
-
-    @pytest.mark.asyncio
-    async def test_get_pending_with_skip_locked(self):
-        from src.infrastructure.database import get_session
-        from src.db.repositories import EmbeddingRequestRepository
-
-        async with get_session() as session:
-            repo = EmbeddingRequestRepository(session)
-            pending = await repo.get_pending_requests(limit=5)
-            # Should return list (possibly empty, but no error)
-            assert isinstance(pending, list)
-
-    @pytest.mark.asyncio
-    async def test_count_by_status(self):
-        from src.infrastructure.database import get_session
-        from src.db.repositories import EmbeddingRequestRepository
-
-        async with get_session() as session:
-            repo = EmbeddingRequestRepository(session)
-            counts = await repo.count_by_status()
-            assert "to_work" in counts
-            assert "working" in counts
-            assert "embedded" in counts
-            assert "done" in counts
-            assert "error" in counts
+# DB tests moved to tests/test_db.py (CI-safe, no CLIP dependency)

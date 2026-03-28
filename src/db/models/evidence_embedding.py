@@ -14,9 +14,7 @@ class EvidenceEmbeddingRecord(Base):
     __tablename__ = "evidence_embeddings"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    request_id = Column(
-        UUID(as_uuid=True), ForeignKey("embedding_requests.id"), nullable=False
-    )
+    request_id = Column(UUID(as_uuid=True), ForeignKey("embedding_requests.id"), nullable=False)
     qdrant_point_id = Column(String(255), unique=True, index=True)
     image_index = Column(Integer, default=0)
     image_url = Column(Text, nullable=False)

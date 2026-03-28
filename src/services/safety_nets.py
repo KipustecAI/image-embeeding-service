@@ -1,13 +1,14 @@
 """Safety net jobs — scheduled fallbacks that catch anything the primary path misses.
 
 Under normal operation these find 0 rows. If they find rows, something upstream
-(stream consumer or BatchTrigger) may be broken.
+(stream consumer) may be broken.
 """
 
 import logging
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, delete, select, func
+import numpy as np
+from sqlalchemy import and_, delete
 
 from ..db.models.constants import (
     EmbeddingRequestStatus,
@@ -15,96 +16,22 @@ from ..db.models.constants import (
     SimilarityStatus,
 )
 from ..db.models.embedding_request import EmbeddingRequest
+from ..db.models.search_match import SearchMatch
 from ..db.models.search_request import SearchRequest
 from ..db.repositories import EmbeddingRequestRepository, SearchRequestRepository
 from ..infrastructure.config import get_settings
 from ..infrastructure.database import get_session
-from ..services.batch_trigger import get_batch_trigger
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-# ARQ pool reference — set from lifespan
-_arq_pool = None
+# Vector repo reference — set from lifespan
+_vector_repo = None
 
 
-def set_arq_pool(pool):
-    global _arq_pool
-    _arq_pool = pool
-
-
-async def dispatch_embedding_batch():
-    """Callback for embedding BatchTrigger: pick pending rows, mark WORKING, enqueue ARQ."""
-    if _arq_pool is None:
-        logger.error("ARQ pool not set — cannot dispatch embedding batch")
-        return
-
-    try:
-        async with get_session() as session:
-            repo = EmbeddingRequestRepository(session)
-            pending = await repo.get_pending_requests(limit=settings.batch_trigger_size)
-
-            if not pending:
-                logger.debug("dispatch_embedding_batch: no pending rows found")
-                return
-
-            request_ids = [str(r.id) for r in pending]
-
-            for r in pending:
-                r.status = EmbeddingRequestStatus.WORKING
-                r.processing_started_at = datetime.utcnow()
-            await session.flush()
-
-            await _arq_pool.enqueue_job(
-                "process_evidence_embeddings_batch", request_ids
-            )
-
-        logger.info(f"Dispatched {len(request_ids)} embedding requests to ARQ")
-
-    except Exception as e:
-        logger.error(f"dispatch_embedding_batch failed: {e}", exc_info=True)
-
-
-async def dispatch_search_batch():
-    """Callback for search BatchTrigger: pick pending rows, mark WORKING, enqueue ARQ."""
-    if _arq_pool is None:
-        logger.error("ARQ pool not set — cannot dispatch search batch")
-        return
-
-    try:
-        async with get_session() as session:
-            repo = SearchRequestRepository(session)
-            pending = await repo.get_pending_requests(limit=settings.batch_trigger_search_size)
-
-            if not pending:
-                logger.debug("dispatch_search_batch: no pending rows found")
-                return
-
-            request_ids = [str(r.id) for r in pending]
-
-            for r in pending:
-                r.status = SearchRequestStatus.WORKING
-                r.processing_started_at = datetime.utcnow()
-            await session.flush()
-
-            await _arq_pool.enqueue_job(
-                "process_image_searches_batch", request_ids
-            )
-
-        logger.info(f"Dispatched {len(request_ids)} search requests to ARQ")
-
-    except Exception as e:
-        logger.error(f"dispatch_search_batch failed: {e}", exc_info=True)
-
-
-async def embedding_safety_net():
-    """Every 60s: catch status=1 rows missed by BatchTrigger."""
-    await dispatch_embedding_batch()
-
-
-async def search_safety_net():
-    """Every 120s: catch status=1 search rows missed by BatchTrigger."""
-    await dispatch_search_batch()
+def set_vector_repo(repo):
+    global _vector_repo
+    _vector_repo = repo
 
 
 async def recover_stale_working():
@@ -120,7 +47,9 @@ async def recover_stale_working():
             if r.retry_count >= settings.max_retries:
                 r.status = EmbeddingRequestStatus.ERROR
                 r.error_message = "Max retries exceeded (stale WORKING recovery)"
-                logger.error(f"Embedding request {r.id} failed after {settings.max_retries} retries")
+                logger.error(
+                    f"Embedding request {r.id} failed after {settings.max_retries} retries"
+                )
             else:
                 r.status = EmbeddingRequestStatus.TO_WORK
                 r.worker_id = None
@@ -146,8 +75,12 @@ async def recover_stale_working():
 
 
 async def recalculate_searches():
-    """Every 1h: re-queue completed searches for recalculation."""
+    """Every 1h: re-search Qdrant with stored query vectors. No GPU needed."""
     if not settings.recalculation_enabled:
+        return
+
+    if not _vector_repo:
+        logger.warning("Vector repo not set — skipping recalculation")
         return
 
     async with get_session() as session:
@@ -160,15 +93,59 @@ async def recalculate_searches():
         if not searches:
             return
 
+        recalculated = 0
         for s in searches:
-            s.status = SearchRequestStatus.TO_WORK
-            s.worker_id = None
+            if not s.qdrant_query_point_id:
+                logger.debug(f"Search {s.search_id} has no stored query vector, skipping")
+                continue
 
-    trigger = get_batch_trigger("search")
-    if trigger:
-        await trigger.notify(count=len(searches))
+            query_vector = await _vector_repo.retrieve_query_vector(s.qdrant_query_point_id)
+            if query_vector is None:
+                logger.warning(f"Query vector not found in Qdrant for search {s.search_id}")
+                continue
 
-    logger.info(f"Queued {len(searches)} searches for recalculation")
+            # Build filter conditions
+            filter_conditions = None
+            if s.search_metadata:
+                filter_conditions = {}
+                if "camera_id" in s.search_metadata:
+                    filter_conditions["camera_id"] = s.search_metadata["camera_id"]
+                if "object_type" in s.search_metadata:
+                    filter_conditions["object_type"] = s.search_metadata["object_type"]
+                if not filter_conditions:
+                    filter_conditions = None
+
+            matches = await _vector_repo.search_similar(
+                query_vector=np.array(query_vector, dtype=np.float32),
+                limit=s.max_results,
+                threshold=s.threshold,
+                filter_conditions=filter_conditions,
+            )
+
+            # Delete old matches
+            await session.execute(delete(SearchMatch).where(SearchMatch.search_request_id == s.id))
+
+            for match in matches:
+                session.add(
+                    SearchMatch(
+                        search_request_id=s.id,
+                        evidence_id=str(match.evidence_id),
+                        camera_id=str(match.camera_id) if match.camera_id else None,
+                        similarity_score=match.similarity_score,
+                        image_url=match.image_url,
+                        match_metadata=match.metadata,
+                    )
+                )
+
+            s.total_matches = len(matches)
+            s.similarity_status = (
+                SimilarityStatus.MATCHES_FOUND if len(matches) > 0 else SimilarityStatus.NO_MATCHES
+            )
+            s.processing_completed_at = datetime.utcnow()
+            recalculated += 1
+
+    if recalculated > 0:
+        logger.info(f"Recalculated {recalculated} searches directly via Qdrant")
 
 
 async def cleanup_old_requests():
@@ -179,10 +156,12 @@ async def cleanup_old_requests():
         result = await session.execute(
             delete(EmbeddingRequest).where(
                 and_(
-                    EmbeddingRequest.status.in_([
-                        EmbeddingRequestStatus.DONE,
-                        EmbeddingRequestStatus.ERROR,
-                    ]),
+                    EmbeddingRequest.status.in_(
+                        [
+                            EmbeddingRequestStatus.DONE,
+                            EmbeddingRequestStatus.ERROR,
+                        ]
+                    ),
                     EmbeddingRequest.created_at < cutoff,
                 )
             )
@@ -192,10 +171,12 @@ async def cleanup_old_requests():
         result = await session.execute(
             delete(SearchRequest).where(
                 and_(
-                    SearchRequest.status.in_([
-                        SearchRequestStatus.COMPLETED,
-                        SearchRequestStatus.ERROR,
-                    ]),
+                    SearchRequest.status.in_(
+                        [
+                            SearchRequestStatus.COMPLETED,
+                            SearchRequestStatus.ERROR,
+                        ]
+                    ),
                     SearchRequest.created_at < cutoff,
                 )
             )

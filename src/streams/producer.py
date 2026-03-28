@@ -2,7 +2,6 @@
 
 import json
 import logging
-from typing import Optional
 
 import redis
 
@@ -14,7 +13,7 @@ class StreamProducer:
         self,
         redis_host: str = "localhost",
         redis_port: int = 6379,
-        redis_password: Optional[str] = None,
+        redis_password: str | None = None,
         redis_db: int = 3,
     ):
         self._redis = redis.Redis(
@@ -27,8 +26,11 @@ class StreamProducer:
 
     def publish(self, stream: str, event_type: str, payload: dict):
         """Publish an event to a Redis Stream."""
-        self._redis.xadd(stream, {
-            "event_type": event_type,
-            "payload": json.dumps(payload),
-        })
+        self._redis.xadd(
+            stream,
+            {
+                "event_type": event_type,
+                "payload": json.dumps(payload),
+            },
+        )
         logger.info(f"Published {event_type} to {stream}")
