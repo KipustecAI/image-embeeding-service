@@ -34,9 +34,11 @@ from src.services.safety_nets import (
 from src.services.safety_nets import (
     set_vector_repo as set_safety_nets_vector_repo,
 )
+from src.services.storage_uploader import StorageUploader
 from src.streams.embedding_results_consumer import (
     create_embedding_results_consumer,
     set_results_event_loop,
+    set_storage_uploader,
     set_vector_repo,
 )
 from src.streams.producer import StreamProducer
@@ -80,6 +82,11 @@ async def lifespan(app: FastAPI):
     set_search_vector_repo(vector_repo)
     set_safety_nets_vector_repo(vector_repo)
     logger.info("Qdrant connected")
+
+    # 2b. Storage uploader (for ZIP flow image uploads)
+    storage_uploader = StorageUploader(base_url=settings.storage_service_url)
+    set_storage_uploader(storage_uploader)
+    logger.info(f"Storage uploader configured: {settings.storage_service_url}")
 
     # 3. Stream producer (for publishing search requests to GPU)
     stream_producer = StreamProducer(
@@ -266,6 +273,11 @@ async def create_search(
     """Submit a search — publishes to GPU compute stream, returns search_id."""
     search_id = str(__import__("uuid").uuid4())
     user_id = ctx.user_id
+    metadata = body.metadata or {}
+
+    # Multi-tenant: non-admin users can only search their own evidence
+    if ctx.role not in ("admin", "root", "dev"):
+        metadata["user_id"] = user_id
 
     # Create DB row (status=TO_WORK)
     async with get_session() as session:
@@ -276,7 +288,7 @@ async def create_search(
             image_url=body.image_url,
             threshold=body.threshold,
             max_results=body.max_results,
-            metadata=body.metadata,
+            metadata=metadata,
         )
 
     # Publish to GPU compute stream
@@ -289,7 +301,7 @@ async def create_search(
             "image_url": body.image_url,
             "threshold": body.threshold,
             "max_results": body.max_results,
-            "metadata": body.metadata,
+            "metadata": metadata,
         },
     )
 

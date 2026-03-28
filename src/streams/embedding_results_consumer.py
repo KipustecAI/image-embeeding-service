@@ -2,6 +2,11 @@
 
 Stores vectors directly in Qdrant + DB in the consumer (no ARQ queue needed).
 The operation is fast (~70ms) so there's no benefit to deferring it.
+
+New ZIP flow (ETL integration):
+- GPU sends image_name (filename inside ZIP) instead of image_url
+- Backend downloads ZIP, extracts filtered images, uploads to storage service
+- Permanent MinIO URLs stored in DB and Qdrant
 """
 
 import asyncio
@@ -17,6 +22,8 @@ from ..db.repositories import EmbeddingRequestRepository
 from ..domain.entities import ImageEmbedding
 from ..infrastructure.config import get_settings
 from ..infrastructure.database import get_session
+from ..services.storage_uploader import StorageUploader
+from ..services.zip_processor import ZipProcessor
 from .consumer import StreamConsumer
 
 logger = logging.getLogger(__name__)
@@ -24,6 +31,8 @@ settings = get_settings()
 
 _event_loop: asyncio.AbstractEventLoop | None = None
 _vector_repo = None  # QdrantVectorRepository, set at startup
+_zip_processor = ZipProcessor()
+_storage_uploader: StorageUploader | None = None
 
 
 def set_results_event_loop(loop: asyncio.AbstractEventLoop):
@@ -34,6 +43,11 @@ def set_results_event_loop(loop: asyncio.AbstractEventLoop):
 def set_vector_repo(repo):
     global _vector_repo
     _vector_repo = repo
+
+
+def set_storage_uploader(uploader: StorageUploader):
+    global _storage_uploader
+    _storage_uploader = uploader
 
 
 def create_embedding_results_consumer() -> StreamConsumer:
@@ -73,9 +87,14 @@ def _handle_compute_error(event_type: str, payload: dict, message_id: str):
 
 
 async def _process_embeddings_result(payload: dict, message_id: str):
-    """Receive pre-computed vectors → store in Qdrant + DB directly (no ARQ queue)."""
+    """Receive pre-computed vectors → download ZIP → upload images → store in Qdrant + DB."""
     evidence_id = payload.get("evidence_id", "")
     camera_id = payload.get("camera_id", "")
+    zip_url = payload.get("zip_url")
+    user_id = payload.get("user_id")
+    device_id = payload.get("device_id")
+    app_id = payload.get("app_id")
+    infraction_code = payload.get("infraction_code")
     embeddings_data = payload.get("embeddings", [])
 
     if not evidence_id or not embeddings_data:
@@ -90,22 +109,43 @@ async def _process_embeddings_result(payload: dict, message_id: str):
             return
 
     try:
-        # 1. Build Qdrant embeddings + DB records
+        # 1. If ZIP flow: download ZIP, extract filtered images, upload to storage
+        uploaded_urls: dict[str, str] = {}  # image_name → public_url
+
+        if zip_url and _storage_uploader:
+            image_names = [e["image_name"] for e in embeddings_data if "image_name" in e]
+            if image_names:
+                image_map = await _zip_processor.download_and_extract(zip_url, image_names)
+                folder = f"embeddings/{camera_id}/{evidence_id}"
+                for name, img_bytes in image_map.items():
+                    public_url = await _storage_uploader.upload_image(img_bytes, name, folder)
+                    if public_url:
+                        uploaded_urls[name] = public_url
+
+        # 2. Build Qdrant embeddings + DB records
         qdrant_embeddings: list[ImageEmbedding] = []
         db_records: list[EvidenceEmbeddingRecord] = []
+        all_image_urls: list[str] = []
 
         for emb in embeddings_data:
             point_id = str(uuid4())
             vector = np.array(emb["vector"], dtype=np.float32)
 
+            # Resolve image URL: uploaded URL (ZIP flow) or direct URL (legacy)
+            image_name = emb.get("image_name", "")
+            image_url = uploaded_urls.get(image_name, emb.get("image_url", ""))
+            all_image_urls.append(image_url)
+
             embedding = ImageEmbedding.from_evidence(
                 evidence_id=evidence_id,
                 vector=vector,
-                image_url=emb["image_url"],
+                image_url=image_url,
                 camera_id=camera_id,
                 additional_metadata={
-                    "image_index": emb["image_index"],
-                    "total_images": emb["total_images"],
+                    "image_index": emb.get("image_index", 0),
+                    "user_id": user_id,
+                    "device_id": device_id,
+                    "app_id": app_id,
                 },
             )
             embedding.id = point_id
@@ -114,24 +154,28 @@ async def _process_embeddings_result(payload: dict, message_id: str):
             db_records.append(
                 EvidenceEmbeddingRecord(
                     qdrant_point_id=point_id,
-                    image_index=emb["image_index"],
-                    image_url=emb["image_url"],
+                    image_index=emb.get("image_index", 0),
+                    image_url=image_url,
                     json_data=embedding.metadata,
                 )
             )
 
-        # 2. Store in Qdrant (single bulk upsert)
+        # 3. Store in Qdrant (single bulk upsert)
         if _vector_repo and qdrant_embeddings:
             await _vector_repo.store_embeddings_batch(qdrant_embeddings)
 
-        # 3. Create DB request + embedding records in one transaction
+        # 4. Create DB request + embedding records in one transaction
         async with get_session() as session:
             repo = EmbeddingRequestRepository(session)
             request = await repo.create_request(
                 evidence_id=evidence_id,
                 camera_id=camera_id,
-                image_urls=[e["image_url"] for e in embeddings_data],
+                image_urls=all_image_urls,
                 stream_msg_id=message_id,
+                user_id=user_id,
+                device_id=device_id,
+                app_id=app_id,
+                infraction_code=infraction_code,
             )
 
             # Link DB records to the request
@@ -145,7 +189,8 @@ async def _process_embeddings_result(payload: dict, message_id: str):
 
         logger.info(
             f"Stored {len(qdrant_embeddings)} vectors for evidence {evidence_id} "
-            f"(input={payload.get('input_count')}, filtered={payload.get('filtered_count')})"
+            f"(input={payload.get('input_count')}, filtered={payload.get('filtered_count')}, "
+            f"uploaded={len(uploaded_urls)})"
         )
 
     except Exception as e:
@@ -159,6 +204,10 @@ async def _process_embeddings_result(payload: dict, message_id: str):
                     camera_id=camera_id,
                     image_urls=[],
                     stream_msg_id=message_id,
+                    user_id=user_id,
+                    device_id=device_id,
+                    app_id=app_id,
+                    infraction_code=infraction_code,
                 )
                 request.status = EmbeddingRequestStatus.ERROR
                 request.error_message = str(e)[:500]

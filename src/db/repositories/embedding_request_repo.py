@@ -48,6 +48,10 @@ class EmbeddingRequestRepository:
         camera_id: str,
         image_urls: list,
         stream_msg_id: str | None = None,
+        user_id: str | None = None,
+        device_id: str | None = None,
+        app_id: int | None = None,
+        infraction_code: str | None = None,
     ) -> EmbeddingRequest:
         """Create new embedding request at status=1."""
         request = EmbeddingRequest(
@@ -55,6 +59,10 @@ class EmbeddingRequestRepository:
             camera_id=camera_id,
             image_urls=image_urls,
             stream_message_id=stream_msg_id,
+            user_id=user_id,
+            device_id=device_id,
+            app_id=app_id,
+            infraction_code=infraction_code,
         )
         self.session.add(request)
         await self.session.flush()
