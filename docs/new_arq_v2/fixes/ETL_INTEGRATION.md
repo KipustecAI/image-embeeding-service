@@ -16,7 +16,7 @@ The ETL service publishes a richer payload to `evidence:embed` than what we curr
 |-------|---------|----------------------|
 | `evidence_id` | Yes | Yes |
 | `camera_id` | Yes | Yes |
-| `image_urls` | Yes (array of URLs) | **No** — replaced by `zip_url` |
+| `image_urls` | ~~Yes~~ (removed) | **No** — replaced by `zip_url` |
 | `zip_url` | No | **Yes** |
 | `user_id` | No | **Yes** |
 | `device_id` | No | **Yes** |
@@ -126,18 +126,16 @@ async def _process_evidence(payload, message_id):
     evidence_id = payload.get("evidence_id", "")
     camera_id = payload.get("camera_id", "")
     zip_url = payload.get("zip_url")
-    image_urls = payload.get("image_urls", [])  # backwards compat
+    if not evidence_id or not zip_url:
+        logger.warning(f"Skipping: missing evidence_id or zip_url")
+        return
 
-    if zip_url:
-        # New flow: download ZIP → extract images → diversity filter → CLIP
-        extracted_images = await download_and_extract_zip(zip_url)
-        filtered = diversity_filter(extracted_images)
-        vectors = clip_inference(filtered)
-        embeddings = [{"image_name": img.filename, "vector": v, "image_index": i}
-                      for i, (img, v) in enumerate(zip(filtered, vectors))]
-    elif image_urls:
-        # Legacy flow: direct image URLs
-        ...
+    # Download ZIP → extract images → diversity filter → CLIP
+    extracted_images = await download_and_extract_zip(zip_url)
+    filtered = diversity_filter(extracted_images)
+    vectors = clip_inference(filtered)
+    embeddings = [{"image_name": img.filename, "vector": v, "image_index": i}
+                  for i, (img, v) in enumerate(zip(filtered, vectors))]
 
     producer.publish(output_stream, {
         "evidence_id": evidence_id,
@@ -295,7 +293,7 @@ async def _process_embeddings_result(payload, message_id):
 
     for emb in embeddings_data:
         image_name = emb.get("image_name", "")
-        image_url = url_map.get(image_name) or emb.get("image_url", "")
+        image_url = url_map.get(image_name, "")
 
         # Upsert to Qdrant with new metadata fields
         point_id = str(uuid4())
@@ -325,7 +323,7 @@ async def _process_embeddings_result(payload, message_id):
                 device_id=device_id,
                 app_id=app_id,
                 infraction_code=infraction_code,
-                image_urls=[url for _, url in uploaded_urls] or [e.get("image_url") for e in embeddings_data],
+                image_urls=[url for _, url in uploaded_urls],
                 stream_msg_id=message_id,
             )
 ```
@@ -400,22 +398,6 @@ Payload indices: `evidence_id`, `camera_id`, `user_id`, `device_id`, `app_id`, `
 
 ---
 
-## Backwards Compatibility
-
-The compute service should handle both flows:
-
-| Input | Flow |
-|-------|------|
-| `zip_url` present | New flow: download ZIP → extract → filter → embed → pass `image_name` |
-| `image_urls` present | Legacy flow: download URLs → filter → embed → pass `image_url` |
-
-The backend should handle both output formats:
-
-| Output field | Flow |
-|-------------|------|
-| `image_name` + `zip_url` | New flow: download ZIP → extract → upload to storage → permanent URL |
-| `image_url` | Legacy flow: URL is already permanent, store as-is |
-
 ---
 
 ## Files to Create/Modify
@@ -464,4 +446,3 @@ The backend should handle both output formats:
    - Qdrant points have `user_id`, `device_id`, `app_id` in payload
 6. Search as regular user → only sees own evidence
 7. Search as admin → sees all evidence
-8. Legacy flow still works (publish with `image_urls` instead of `zip_url`)
