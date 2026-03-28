@@ -70,7 +70,7 @@ class Settings(BaseSettings):
 
     # Storage Service (for uploading filtered images)
     storage_service_url: str = Field(
-        "http://storage-service:8080",
+        "http://storage-service:8006",
         validation_alias="STORAGE_SERVICE_URL",
     )
 
