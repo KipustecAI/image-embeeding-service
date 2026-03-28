@@ -18,7 +18,7 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           port: ${{ secrets.SERVER_PORT }}
           script: |
-            cd /root/projects/lucam/image-embeeding-service
+            cd /root/projects/microservices/image-embeeding-service
 
             echo "=== Pulling latest changes ==="
             git pull origin main
@@ -27,11 +27,12 @@ jobs:
             make build-image
 
             echo "=== Running migrations ==="
+            cd /root/projects/microservices/video-server_microservicios-orchestrated
             docker compose run --rm ms-embedding-api alembic upgrade head
 
             echo "=== Restarting service ==="
-            cd /root/projects/lucam/orchestrated
             docker compose up -d ms-embedding-api
 
             echo "=== Service status ==="
             docker compose ps ms-embedding-api
+            echo "Deploy complete!"
