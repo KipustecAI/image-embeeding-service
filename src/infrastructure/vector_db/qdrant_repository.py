@@ -82,6 +82,23 @@ class QdrantVectorRepository(VectorRepository):
                     field_schema="keyword",
                 )
 
+                # Multi-tenant indices
+                self.client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name="user_id",
+                    field_schema="keyword",
+                )
+                self.client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name="device_id",
+                    field_schema="keyword",
+                )
+                self.client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name="app_id",
+                    field_schema="integer",
+                )
+
                 logger.info(f"Collection '{self.collection_name}' created successfully")
             else:
                 logger.info(f"Collection '{self.collection_name}' already exists")

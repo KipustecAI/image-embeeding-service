@@ -38,8 +38,6 @@ class Settings(BaseSettings):
     redis_host: str = Field("localhost", validation_alias="REDIS_HOST")
     redis_port: int = Field(6379, validation_alias="REDIS_PORT")
     redis_password: str | None = Field(None, validation_alias="REDIS_PASSWORD")
-    redis_database: int = Field(5, validation_alias="REDIS_DATABASE")
-
     # Redis Streams
     redis_streams_db: int = Field(3, validation_alias="REDIS_STREAMS_DB")
     # Publishing to GPU (input streams)
@@ -69,6 +67,12 @@ class Settings(BaseSettings):
     stale_working_minutes: int = Field(10, validation_alias="STALE_WORKING_MINUTES")
     max_retries: int = Field(3, validation_alias="MAX_RETRIES")
     cleanup_days: int = Field(30, validation_alias="CLEANUP_DAYS")
+
+    # Storage Service (for uploading filtered images)
+    storage_service_url: str = Field(
+        "http://storage-service:8080",
+        validation_alias="STORAGE_SERVICE_URL",
+    )
 
     # Search Configuration
     default_similarity_threshold: float = Field(

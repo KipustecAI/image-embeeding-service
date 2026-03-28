@@ -19,6 +19,12 @@ class EmbeddingRequest(Base):
     status = Column(Integer, nullable=False, default=1, index=True)
     image_urls = Column(JSONB, default=[])
 
+    # ETL fields (multi-tenant + infraction metadata)
+    user_id = Column(String(255), nullable=True, index=True)
+    device_id = Column(String(255), nullable=True)
+    app_id = Column(Integer, nullable=True)
+    infraction_code = Column(String(255), nullable=True, index=True)
+
     # Worker tracking
     worker_id = Column(String(100))
     error_message = Column(Text)
