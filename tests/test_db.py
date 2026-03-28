@@ -13,14 +13,15 @@ from src.infrastructure.config import get_settings
 
 settings = get_settings()
 
-_engine = create_async_engine(settings.database_url)
-_async_session = sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)
-
 
 @pytest.fixture
 async def session():
-    async with _async_session() as s:
+    """Fresh engine + session per test to avoid event loop conflicts."""
+    engine = create_async_engine(settings.database_url)
+    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with async_session() as s:
         yield s
+    await engine.dispose()
 
 
 @pytest.mark.asyncio
