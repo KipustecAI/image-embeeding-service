@@ -21,9 +21,9 @@ Published by the Video Server when evidence reaches status=3 (FOUND).
 }
 ```
 
-## Stream: evidence:search (Video Server → Compute)
+## Stream: evidence:search (Backend → Compute)
 
-Published by the Video Server when a user creates an image search.
+Published by the backend when a user submits a search via `POST /api/v1/search`.
 
 ```json
 {
@@ -35,8 +35,7 @@ Published by the Video Server when a user creates an image search.
     "threshold": 0.75,
     "max_results": 50,
     "metadata": {
-      "camera_id": "660e8400-e29b-41d4-a716-446655440000",
-      "date_from": "2026-01-01T00:00:00Z"
+      "camera_id": "660e8400-e29b-41d4-a716-446655440000"
     }
   }
 }
