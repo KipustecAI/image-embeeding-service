@@ -21,6 +21,9 @@ target_metadata = Base.metadata
 # Override sqlalchemy.url with our settings (swap async driver for sync)
 settings = get_settings()
 sync_url = settings.database_url.replace("postgresql+asyncpg", "postgresql")
+# psycopg2 uses "sslmode" not "ssl"
+sync_url = sync_url.replace("?ssl=require", "?sslmode=require")
+sync_url = sync_url.replace("&ssl=require", "&sslmode=require")
 config.set_main_option("sqlalchemy.url", sync_url)
 
 
@@ -45,9 +48,7 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        context.configure(
-            connection=connection, target_metadata=target_metadata
-        )
+        context.configure(connection=connection, target_metadata=target_metadata)
 
         with context.begin_transaction():
             context.run_migrations()
