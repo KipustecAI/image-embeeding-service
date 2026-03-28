@@ -88,6 +88,9 @@ jobs:
             sleep 2
           done
 
+      - name: Run migrations
+        run: alembic upgrade head
+
       - name: Run tests
         run: >
           pytest tests/test_db.py -v --tb=short
