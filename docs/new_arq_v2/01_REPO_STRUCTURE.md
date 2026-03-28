@@ -1,11 +1,11 @@
-# Step 1: Repository Structure
+# Repository Structure
 
 ## Two Repos
 
 ```
 lucam/
-├── embedding-compute/       ← NEW repo (GPU service)
-└── embedding-backend/       ← RENAMED from image-embeeding-service (CPU service)
+├── embedding-compute/           ← GPU service (separate repo)
+└── image-embeeding-service/     ← CPU backend (this repo)
 ```
 
 ---
@@ -17,18 +17,18 @@ Stateless. No DB, no Qdrant. Only CLIP + Redis Streams.
 ```
 embedding-compute/
 ├── src/
-│   ├── main.py                      # Entry point: start consumers + optional health endpoint
+│   ├── main.py                      # Entry point: load CLIP, start consumers, signal shutdown
 │   ├── config.py                    # CLIP + Redis + diversity filter settings
 │   ├── streams/
-│   │   ├── consumer.py              # Generic StreamConsumer (copied from current)
+│   │   ├── consumer.py              # Generic StreamConsumer (shared pattern)
 │   │   ├── producer.py              # Publish results to output streams
 │   │   ├── evidence_handler.py      # evidence:embed → download + filter + CLIP → embeddings:results
 │   │   └── search_handler.py        # evidence:search → download + CLIP → search:results
 │   ├── services/
-│   │   ├── clip_embedder.py         # CLIP model (moved from infrastructure/embedding/)
-│   │   └── diversity_filter.py      # Bhattacharyya histogram filter (moved from services/)
+│   │   ├── clip_embedder.py         # CLIP ViT-B-32 via sentence-transformers
+│   │   └── diversity_filter.py      # Bhattacharyya histogram filter
 │   └── utils/
-│       └── image_downloader.py      # Async image download with overlap
+│       └── image_downloader.py      # Async image download, supports file:// URLs
 ├── Dockerfile                       # CUDA base image + torch + sentence-transformers
 ├── docker-compose.yml               # Just Redis (for local dev)
 ├── requirements.txt                 # torch, sentence-transformers, redis, opencv, Pillow, httpx
@@ -37,156 +37,97 @@ embedding-compute/
 └── CLAUDE.md
 ```
 
-### requirements.txt (compute)
-
-```
-# CLIP model
-torch>=2.5.0
-sentence-transformers>=3.3.0
-Pillow>=11.0.0
-numpy>=1.26.0
-
-# Image processing
-opencv-python-headless>=4.8.0
-httpx>=0.28.0
-
-# Redis Streams
-redis>=5.2.0
-
-# Config
-pydantic>=2.10.0
-pydantic-settings>=2.6.0
-python-dotenv>=1.0.0
-
-# Optional: minimal health endpoint
-fastapi>=0.115.0
-uvicorn[standard]>=0.34.0
-```
-
 ~4GB Docker image (dominated by torch + CUDA).
-
-### config.py (compute)
-
-```python
-class Settings(BaseSettings):
-    # CLIP
-    clip_model_name: str = "ViT-B-32"
-    clip_device: str = "cuda"
-    clip_batch_size: int = 4
-
-    # Redis Streams (input)
-    redis_host: str = "localhost"
-    redis_port: int = 6379
-    redis_password: Optional[str] = None
-    redis_streams_db: int = 3
-    stream_evidence_embed: str = "evidence:embed"
-    stream_evidence_search: str = "evidence:search"
-    stream_consumer_group: str = "compute-workers"
-    stream_consumer_block_ms: int = 5000
-    stream_consumer_batch_size: int = 10
-    stream_reclaim_idle_ms: int = 3_600_000
-    stream_dead_letter_max_retries: int = 3
-
-    # Redis Streams (output)
-    stream_embeddings_results: str = "embeddings:results"
-    stream_search_results: str = "search:results"
-
-    # Diversity filter
-    diversity_filter_threshold: float = 0.10
-    diversity_filter_histogram_bins: int = 64
-    diversity_filter_compare_all: bool = False
-    diversity_filter_min_dimension: int = 50
-    diversity_filter_max_aspect_ratio: float = 5.0
-    diversity_filter_max_images: int = 10
-    diversity_filter_min_images: int = 1
-
-    # Image download
-    image_download_timeout: int = 30
-    max_image_size: int = 10485760
-```
 
 ---
 
-## embedding-backend/ (CPU)
+## image-embeeding-service/ (CPU Backend — this repo)
 
-Pipeline orchestration. No CLIP, no torch. Lightweight.
+Pipeline orchestration + storage + Search API. No CLIP, no torch. Lightweight.
 
 ```
-embedding-backend/
+image-embeeding-service/
 ├── src/
-│   ├── main.py                          # FastAPI app + lifespan
+│   ├── main.py                          # FastAPI app + lifespan (port 8001)
 │   ├── api/
-│   │   └── dependencies.py              # API key auth
-│   ├── config.py                        # DB + Qdrant + Redis + API settings
+│   │   └── dependencies.py              # UserContext from gateway headers (X-User-Id, X-User-Role)
 │   ├── db/
-│   │   ├── base.py
+│   │   ├── base.py                      # SQLAlchemy declarative base
 │   │   ├── models/
-│   │   │   ├── constants.py
-│   │   │   ├── embedding_request.py
-│   │   │   ├── evidence_embedding.py
-│   │   │   └── search_request.py
+│   │   │   ├── constants.py             # Status enums
+│   │   │   ├── embedding_request.py     # Tracks evidence through embedding pipeline
+│   │   │   ├── evidence_embedding.py    # One row per vector stored in Qdrant
+│   │   │   ├── search_request.py        # Tracks search lifecycle + qdrant_query_point_id
+│   │   │   └── search_match.py          # Individual match results per search
 │   │   └── repositories/
 │   │       ├── embedding_request_repo.py
 │   │       └── search_request_repo.py
 │   ├── infrastructure/
-│   │   ├── database.py                  # SQLAlchemy async engine
+│   │   ├── config.py                    # Pydantic BaseSettings (DB, Qdrant, Redis, streams)
+│   │   ├── database.py                  # SQLAlchemy async engine + get_session()
 │   │   └── vector_db/
-│   │       └── qdrant_repository.py     # Qdrant client
+│   │       └── qdrant_repository.py     # Qdrant client (evidence_embeddings + search_queries)
 │   ├── streams/
-│   │   ├── consumer.py                  # Generic StreamConsumer (same copy)
-│   │   ├── embedding_results_consumer.py  # NEW: embeddings:results → Qdrant + DB
-│   │   └── search_results_consumer.py     # NEW: search:results → Qdrant search + DB
-│   ├── services/
-│   │   ├── batch_trigger.py
-│   │   ├── safety_nets.py
-│   │   └── storage_worker.py            # NEW: stores vectors in Qdrant + DB records
-│   └── workers/
-│       ├── main.py                      # ARQ worker settings
-│       ├── embedding_storage_worker.py  # Receives vectors → bulk Qdrant upsert + DB
-│       └── search_execution_worker.py   # Receives query vector → Qdrant search + DB
+│   │   ├── consumer.py                  # Generic StreamConsumer (daemon thread + XREADGROUP)
+│   │   ├── producer.py                  # StreamProducer (publishes search requests to GPU)
+│   │   ├── embedding_results_consumer.py  # embeddings:results → Qdrant upsert + DB
+│   │   └── search_results_consumer.py     # search:results → Qdrant search + store matches
+│   └── services/
+│       └── safety_nets.py               # Stale recovery, recalculation, cleanup
 ├── alembic/
 │   ├── env.py
-│   └── versions/
-├── alembic.ini
-├── Dockerfile                           # Python slim, no CUDA
+│   └── versions/                        # 5 migrations
+├── scripts/
+│   ├── test_local_pipeline.sh           # E2E test: embedding + search + mock modes
+│   └── generate_similarity_report.py    # Heatmap visualization
+├── docs/
+│   ├── API_REFERENCE.md                 # v2.1 — 9 endpoints
+│   └── CURL_EXAMPLES.md                 # v2.1 — gateway header examples
+├── tests/
+│   └── test_db.py                       # CI-safe DB model tests
 ├── docker-compose.yml                   # PostgreSQL + Redis + Qdrant
+├── Dockerfile
+├── Makefile                             # install, run-api, run-worker, docker-up, migrate, test
 ├── requirements.txt
-├── .env
-├── .env.dev
+├── pyproject.toml                       # ruff + pytest config
+├── .env                                 # Production defaults (remote hosts)
+├── .env.dev                             # Local dev overrides (localhost, no password)
+├── .env.docker                          # Docker environment
+├── .env.example                         # Documented template
 └── CLAUDE.md
 ```
 
-### requirements.txt (backend)
-
-```
-# API
-fastapi>=0.115.0
-uvicorn[standard]>=0.34.0
-pydantic>=2.10.0
-pydantic-settings>=2.6.0
-python-dotenv>=1.0.0
-
-# Database
-SQLAlchemy>=2.0.0
-asyncpg
-alembic
-psycopg2-binary
-greenlet
-
-# Vector DB
-qdrant-client>=1.12.0
-numpy>=1.26.0
-
-# Redis + task queue
-redis>=5.2.0
-arq>=0.26.0
-
-# Scheduler
-apscheduler>=3.10.0
-
-# HTTP (for Qdrant, internal comms)
-httpx>=0.28.0
-aiofiles>=24.1.0
-```
-
 ~200MB Docker image. **No torch, no CUDA, no sentence-transformers.**
+
+### Qdrant Collections
+
+| Collection | Purpose |
+|------------|---------|
+| `evidence_embeddings` | Evidence image vectors (512-dim, cosine). Payload indices on `camera_id`, `evidence_id`, `source_type` |
+| `search_queries` | Stored query vectors for GPU-free recalculation. One point per search |
+
+### Database Tables
+
+| Table | Purpose |
+|-------|---------|
+| `embedding_requests` | Tracks each evidence through the embedding pipeline |
+| `evidence_embeddings` | One row per vector stored in Qdrant (FK → embedding_requests) |
+| `search_requests` | Tracks search lifecycle. `qdrant_query_point_id` links to stored query vector |
+| `search_matches` | Individual match results per search (FK → search_requests) |
+
+### Legacy Code (still present, not used in happy path)
+
+These files exist from the v1 monolith but are not wired into the current lifespan:
+
+| File | Status |
+|------|--------|
+| `src/services/batch_trigger.py` | Not used — consumers store directly |
+| `src/workers/` | Legacy ARQ workers — not needed (no `make run-worker` required) |
+| `src/infrastructure/scheduler/arq_scheduler.py` | Legacy — replaced by APScheduler in main.py |
+| `src/infrastructure/api/video_server_client.py` | Legacy — HTTP client to Video Server |
+| `src/infrastructure/embedding/clip_embedder.py` | Legacy — CLIP moved to compute service |
+| `src/services/diversity_filter.py` | Legacy — moved to compute service |
+| `src/streams/evidence_consumer.py` | Legacy — replaced by embedding_results_consumer |
+| `src/streams/search_consumer.py` | Legacy — replaced by search_results_consumer |
+| `src/application/` | Legacy — old use cases |
+| `src/domain/` | Legacy — old entities/interfaces |
