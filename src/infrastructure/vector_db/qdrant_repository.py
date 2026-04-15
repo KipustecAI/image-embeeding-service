@@ -6,10 +6,12 @@ from uuid import UUID
 
 import numpy as np
 from qdrant_client import QdrantClient
+from qdrant_client.http.exceptions import UnexpectedResponse
 from qdrant_client.models import (
     Distance,
     FieldCondition,
     Filter,
+    MatchAny,
     MatchValue,
     PointStruct,
     UpdateStatus,
@@ -23,6 +25,23 @@ from ..config import Settings
 logger = logging.getLogger(__name__)
 
 SEARCH_QUERIES_COLLECTION = "search_queries"
+
+# Source of truth for payload indices on the evidence_embeddings collection.
+# Adding a new filterable field? Add one line here — _ensure_payload_indices
+# will pick it up on next startup (idempotent, safe for existing collections).
+_EVIDENCE_PAYLOAD_INDICES: list[tuple[str, str]] = [
+    ("source_type", "keyword"),
+    ("camera_id", "keyword"),
+    ("evidence_id", "keyword"),
+    # Multi-tenant
+    ("user_id", "keyword"),
+    ("device_id", "keyword"),
+    ("app_id", "integer"),
+    # Weapons enrichment — see docs/weapons/02_QDRANT.md
+    ("weapon_analyzed", "bool"),
+    ("has_weapon", "bool"),
+    ("weapon_classes", "keyword"),
+]
 
 
 class QdrantVectorRepository(VectorRepository):
@@ -64,44 +83,14 @@ class QdrantVectorRepository(VectorRepository):
                     collection_name=self.collection_name,
                     vectors_config=VectorParams(size=self.vector_size, distance=Distance.COSINE),
                 )
-
-                # Create payload indices for better search performance
-                self.client.create_payload_index(
-                    collection_name=self.collection_name,
-                    field_name="source_type",
-                    field_schema="keyword",
-                )
-                self.client.create_payload_index(
-                    collection_name=self.collection_name,
-                    field_name="camera_id",
-                    field_schema="keyword",
-                )
-                self.client.create_payload_index(
-                    collection_name=self.collection_name,
-                    field_name="evidence_id",
-                    field_schema="keyword",
-                )
-
-                # Multi-tenant indices
-                self.client.create_payload_index(
-                    collection_name=self.collection_name,
-                    field_name="user_id",
-                    field_schema="keyword",
-                )
-                self.client.create_payload_index(
-                    collection_name=self.collection_name,
-                    field_name="device_id",
-                    field_schema="keyword",
-                )
-                self.client.create_payload_index(
-                    collection_name=self.collection_name,
-                    field_name="app_id",
-                    field_schema="integer",
-                )
-
                 logger.info(f"Collection '{self.collection_name}' created successfully")
             else:
                 logger.info(f"Collection '{self.collection_name}' already exists")
+
+            # Ensure payload indices exist. Runs unconditionally so new indices
+            # added to _EVIDENCE_PAYLOAD_INDICES are picked up by existing
+            # collections on next startup — not just freshly-created ones.
+            self._ensure_payload_indices(self.collection_name, _EVIDENCE_PAYLOAD_INDICES)
 
             # Create search_queries collection (lightweight, for recalculation)
             queries_exists = any(c.name == SEARCH_QUERIES_COLLECTION for c in collections)
@@ -121,6 +110,35 @@ class QdrantVectorRepository(VectorRepository):
         except Exception as e:
             logger.error(f"Failed to initialize Qdrant: {e}")
             raise
+
+    def _ensure_payload_indices(self, collection_name: str, indices: list[tuple[str, str]]) -> None:
+        """Create payload indices idempotently. Safe to call on every startup.
+
+        Qdrant's create_payload_index is a no-op on existing indices in newer
+        versions, and raises UnexpectedResponse with a benign conflict in older
+        ones — either way we swallow it. A missing index only makes filtered
+        search slower, not incorrect, so we log failures and keep going rather
+        than crashing startup.
+        """
+        for field_name, field_schema in indices:
+            try:
+                self.client.create_payload_index(
+                    collection_name=collection_name,
+                    field_name=field_name,
+                    field_schema=field_schema,
+                )
+                logger.debug(
+                    f"Payload index ensured: {collection_name}.{field_name} ({field_schema})"
+                )
+            except UnexpectedResponse as e:
+                logger.debug(
+                    f"Payload index {field_name} already present on {collection_name}: {e}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to create payload index {field_name} on {collection_name}: {e}. "
+                    f"Filtering on this field may fall back to full-scan until the index exists."
+                )
 
     async def store_embedding(self, embedding: ImageEmbedding) -> bool:
         """Store a single embedding in Qdrant."""
@@ -178,12 +196,18 @@ class QdrantVectorRepository(VectorRepository):
     ) -> list[SearchResult]:
         """Search for similar vectors."""
         try:
-            # Build filter
+            # Build filter. A list value triggers MatchAny (subset match) —
+            # used by weapon_classes. See docs/weapons/02_QDRANT.md.
             search_filter = None
             if filter_conditions:
                 must_conditions = []
                 for field, value in filter_conditions.items():
-                    must_conditions.append(FieldCondition(key=field, match=MatchValue(value=value)))
+                    if isinstance(value, list):
+                        must_conditions.append(FieldCondition(key=field, match=MatchAny(any=value)))
+                    else:
+                        must_conditions.append(
+                            FieldCondition(key=field, match=MatchValue(value=value))
+                        )
 
                 if must_conditions:
                     search_filter = Filter(must=must_conditions)

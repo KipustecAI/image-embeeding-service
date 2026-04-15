@@ -9,3 +9,4 @@ data/
 *.png
 *.jpg
 Screenshot*
+clean_all_data.sh

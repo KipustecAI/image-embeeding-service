@@ -52,6 +52,11 @@ class EmbeddingRequestRepository:
         device_id: str | None = None,
         app_id: int | None = None,
         infraction_code: str | None = None,
+        weapon_analyzed: bool = False,
+        has_weapon: bool = False,
+        weapon_classes: list[str] | None = None,
+        weapon_max_confidence: float | None = None,
+        weapon_summary: dict | None = None,
     ) -> EmbeddingRequest:
         """Create new embedding request at status=1."""
         request = EmbeddingRequest(
@@ -63,6 +68,11 @@ class EmbeddingRequestRepository:
             device_id=device_id,
             app_id=app_id,
             infraction_code=infraction_code,
+            weapon_analyzed=weapon_analyzed,
+            has_weapon=has_weapon,
+            weapon_classes=weapon_classes or [],
+            weapon_max_confidence=weapon_max_confidence,
+            weapon_summary=weapon_summary,
         )
         self.session.add(request)
         await self.session.flush()

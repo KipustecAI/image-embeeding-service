@@ -97,6 +97,16 @@ async def _process_embeddings_result(payload: dict, message_id: str):
     infraction_code = payload.get("infraction_code")
     embeddings_data = payload.get("embeddings", [])
 
+    # Optional weapons enrichment — see docs/weapons/03_CONSUMER.md
+    weapon_analysis = payload.get("weapon_analysis") or {}
+    weapon_analyzed = bool(weapon_analysis)
+    weapon_summary = weapon_analysis.get("summary") or {}
+    detections_by_name: dict[str, list[dict]] = {
+        img["image_name"]: (img.get("detections") or [])
+        for img in (weapon_analysis.get("images") or [])
+        if "image_name" in img
+    }
+
     if not evidence_id or not embeddings_data:
         logger.warning(f"Skipping result with missing data: evidence_id={evidence_id}")
         return
@@ -138,6 +148,13 @@ async def _process_embeddings_result(payload: dict, message_id: str):
             image_url = uploaded_urls.get(image_name, emb.get("image_url", ""))
             all_image_urls.append(image_url)
 
+            # Per-image weapon enrichment — see docs/weapons/03_CONSUMER.md
+            per_image_detections = detections_by_name.get(image_name, [])
+            per_image_has_weapon = weapon_analyzed and len(per_image_detections) > 0
+            per_image_classes = sorted(
+                {d["class_name"] for d in per_image_detections if d.get("class_name")}
+            )
+
             embedding = ImageEmbedding.from_evidence(
                 evidence_id=evidence_id,
                 vector=vector,
@@ -148,6 +165,9 @@ async def _process_embeddings_result(payload: dict, message_id: str):
                     "user_id": user_id,
                     "device_id": device_id,
                     "app_id": app_id,
+                    "weapon_analyzed": weapon_analyzed,
+                    "has_weapon": per_image_has_weapon,
+                    "weapon_classes": per_image_classes,
                 },
             )
             embedding.id = point_id
@@ -159,6 +179,7 @@ async def _process_embeddings_result(payload: dict, message_id: str):
                     image_index=emb.get("image_index", 0),
                     image_url=image_url,
                     json_data=embedding.metadata,
+                    weapon_detections=per_image_detections if weapon_analyzed else None,
                 )
             )
 
@@ -178,6 +199,11 @@ async def _process_embeddings_result(payload: dict, message_id: str):
                 device_id=device_id,
                 app_id=app_id,
                 infraction_code=infraction_code,
+                weapon_analyzed=weapon_analyzed,
+                has_weapon=bool(weapon_summary.get("has_weapon", False)),
+                weapon_classes=list(weapon_summary.get("classes_detected") or []),
+                weapon_max_confidence=weapon_summary.get("max_confidence"),
+                weapon_summary=weapon_summary or None,
             )
 
             # Link DB records to the request
@@ -192,7 +218,10 @@ async def _process_embeddings_result(payload: dict, message_id: str):
         logger.info(
             f"Stored {len(qdrant_embeddings)} vectors for evidence {evidence_id} "
             f"(input={payload.get('input_count')}, filtered={payload.get('filtered_count')}, "
-            f"uploaded={len(uploaded_urls)})"
+            f"uploaded={len(uploaded_urls)}, "
+            f"weapon_analyzed={weapon_analyzed}, "
+            f"has_weapon={bool(weapon_summary.get('has_weapon', False))}, "
+            f"detections={weapon_summary.get('total_detections', 0)})"
         )
 
     except Exception as e:

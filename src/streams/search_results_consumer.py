@@ -10,6 +10,7 @@ from datetime import datetime
 
 import numpy as np
 
+from ..application.helpers.weapon_filters import build_weapon_filter_conditions
 from ..db.models.constants import SearchRequestStatus, SimilarityStatus
 from ..db.models.search_match import SearchMatch
 from ..db.repositories import SearchRequestRepository
@@ -86,14 +87,18 @@ async def _process_search_result(payload: dict, message_id: str):
     try:
         query_vector = np.array(vector, dtype=np.float32)
 
-        # Build filter conditions
-        filter_conditions = None
+        # Build filter conditions. Explicit allow-list keeps client-supplied
+        # metadata from injecting arbitrary Qdrant filter keys.
+        filter_conditions: dict = {}
         if search_metadata:
-            filter_conditions = {}
             if "camera_id" in search_metadata:
                 filter_conditions["camera_id"] = search_metadata["camera_id"]
             if "object_type" in search_metadata:
                 filter_conditions["object_type"] = search_metadata["object_type"]
+            # Weapons — translated from weapons_filter mode via shared helper
+            filter_conditions.update(build_weapon_filter_conditions(search_metadata))
+        if not filter_conditions:
+            filter_conditions = None
 
         # Search Qdrant
         matches = []

@@ -68,6 +68,58 @@ curl -X POST http://localhost:8001/api/v1/search \
   }'
 ```
 
+### Search with weapons filter
+
+Four filter modes available: `all` (default), `only`, `exclude`, `analyzed_clean`. See [../weapons/04_SEARCH_API.md](../weapons/04_SEARCH_API.md) for the full design.
+
+```bash
+# Only images with at least one weapon detected
+curl -X POST http://localhost:8001/api/v1/search \
+  -H "X-User-Id: 550e8400-e29b-41d4-a716-446655440000" \
+  -H "X-User-Role: user" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "image_url": "https://storage.example.com/query.jpg",
+    "threshold": 0.75,
+    "weapons_filter": "only"
+  }'
+
+# Narrow by class — handguns only
+curl -X POST http://localhost:8001/api/v1/search \
+  -H "X-User-Id: 550e8400-e29b-41d4-a716-446655440000" \
+  -H "X-User-Role: user" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "image_url": "https://storage.example.com/query.jpg",
+    "threshold": 0.75,
+    "weapons_filter": "only",
+    "weapon_classes": ["handgun"]
+  }'
+
+# Exclude weapon images (broad safe search — includes unanalyzed too)
+curl -X POST http://localhost:8001/api/v1/search \
+  -H "X-User-Id: 550e8400-e29b-41d4-a716-446655440000" \
+  -H "X-User-Role: user" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "image_url": "https://storage.example.com/query.jpg",
+    "threshold": 0.75,
+    "weapons_filter": "exclude"
+  }'
+
+# False-positive review queue — images analyzed by the weapons service
+# that came out clean (candidates for human reclassification)
+curl -X POST http://localhost:8001/api/v1/search \
+  -H "X-User-Id: admin-001" \
+  -H "X-User-Role: admin" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "image_url": "https://storage.example.com/query.jpg",
+    "threshold": 0.75,
+    "weapons_filter": "analyzed_clean"
+  }'
+```
+
 ### Search with local file (development)
 
 ```bash
@@ -195,10 +247,28 @@ Work enters the service via Redis Streams from the GPU compute service. For manu
 
 ### Publish embedding result (bypass GPU)
 
+The payload must include all ETL metadata fields (`user_id`, `device_id`, `app_id`, `infraction_code`, `zip_url`) and `embeddings[].image_name` — the backend will download the ZIP, extract the named frames, upload them to the storage service, and produce permanent URLs.
+
 ```bash
 docker exec embedding-redis redis-cli -n 3 XADD embeddings:results '*' \
   event_type embeddings.computed \
-  payload '{"evidence_id":"test-001","camera_id":"cam-001","embeddings":[{"image_url":"https://example.com/img.jpg","image_index":0,"vector":[0.01,0.02,...512 floats...],"total_images":1}],"input_count":1,"filtered_count":1,"embedded_count":1}'
+  payload '{"evidence_id":"test-001","camera_id":"cam-001","user_id":"user-001","device_id":"dev-001","app_id":1,"infraction_code":"TEST-001","zip_url":"https://minio.lookia.mx/lucam-assets/test.zip","embeddings":[{"image_name":"frame_001.jpg","image_index":0,"vector":[0.01,0.02,...512 floats...]}],"input_count":1,"filtered_count":1,"embedded_count":1}'
+```
+
+### Publish enriched embedding result (with weapon_analysis)
+
+```bash
+docker exec embedding-redis redis-cli -n 3 XADD embeddings:results '*' \
+  event_type embeddings.computed \
+  payload '{"evidence_id":"weapon-test-001","camera_id":"cam-001","user_id":"user-001","device_id":"dev-001","app_id":1,"infraction_code":"WEAPON-TEST","zip_url":"https://minio.lookia.mx/lucam-assets/test.zip","embeddings":[{"image_name":"frame_001.jpg","image_index":0,"vector":[0.01,0.02,"...512 floats..."]}],"input_count":1,"filtered_count":1,"embedded_count":1,"weapon_analysis":{"images":[{"image_name":"frame_001.jpg","image_index":0,"detections":[{"class_name":"handgun","class_id":0,"confidence":0.9,"bbox":{"x1":10,"y1":10,"x2":100,"y2":100}}]}],"summary":{"images_analyzed":1,"images_with_detections":1,"total_detections":1,"classes_detected":["handgun"],"max_confidence":0.9,"has_weapon":true}}}'
+```
+
+### Publish compute error (bypass GPU)
+
+```bash
+docker exec embedding-redis redis-cli -n 3 XADD embeddings:results '*' \
+  event_type compute.error \
+  payload '{"entity_id":"test-001","entity_type":"evidence","error":"No images downloadable"}'
 ```
 
 ### Inspect streams

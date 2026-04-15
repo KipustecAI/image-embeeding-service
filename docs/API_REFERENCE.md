@@ -129,6 +129,8 @@ Creates a search request and publishes it to the GPU compute stream. The GPU com
   "image_url": "https://storage.example.com/query.jpg",
   "threshold": 0.75,
   "max_results": 50,
+  "weapons_filter": "only",
+  "weapon_classes": ["handgun"],
   "metadata": {
     "camera_id": "660e8400-..."
   }
@@ -140,9 +142,22 @@ Creates a search request and publishes it to the GPU compute stream. The GPU com
 | image_url | string | yes | | URL of the image to search with |
 | threshold | float | no | 0.75 | Minimum cosine similarity (0.0-1.0) |
 | max_results | int | no | 50 | Maximum number of results |
+| weapons_filter | string | no | `"all"` | `all` \| `only` \| `exclude` \| `analyzed_clean` — see below |
+| weapon_classes | list[str] | no | null | Class subset (e.g. `["handgun"]`). Only meaningful with `weapons_filter="only"`; ignored otherwise. |
 | metadata | object | no | null | Filter conditions (camera_id, object_type) |
 
 `user_id` is automatically taken from the `X-User-Id` gateway header.
+
+**Weapons filtering modes:**
+
+| `weapons_filter` | Returns |
+|---|---|
+| `"all"` *(default)* | All matches, unchanged from legacy behavior |
+| `"only"` | Only images with at least one weapon detection (optionally narrowed by `weapon_classes`) |
+| `"exclude"` | Images without weapons — includes both analyzed-clean and unanalyzed images |
+| `"analyzed_clean"` | **False-positive review queue** — only images explicitly analyzed by the weapons service and found clean |
+
+See [../weapons/04_SEARCH_API.md](../weapons/04_SEARCH_API.md) for the full design.
 
 **Response (202 Accepted):**
 ```json
@@ -324,7 +339,7 @@ Uses stored query vectors — no GPU, no image re-download. ~100ms per search.
 
 | Collection | Purpose |
 |------------|---------|
-| `evidence_embeddings` | Evidence image vectors (512-dim CLIP ViT-B-32, cosine distance). Payload indices on `camera_id`, `evidence_id`, `source_type` |
+| `evidence_embeddings` | Evidence image vectors (512-dim CLIP ViT-B-32, cosine distance). Payload indices on `evidence_id`, `camera_id`, `source_type`, `user_id`, `device_id`, `app_id` (multi-tenant filtering), plus `weapon_analyzed`, `has_weapon`, `weapon_classes` (weapons filtering — see [../weapons/](../weapons/)) |
 | `search_queries` | Stored query vectors for recalculation. One point per search, payload: `search_id` only |
 
 ## Database Tables
