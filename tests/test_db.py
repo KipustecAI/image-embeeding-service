@@ -100,3 +100,109 @@ async def test_count_by_status(session):
     assert "embedded" in counts
     assert "done" in counts
     assert "error" in counts
+
+
+# ── Weapons enrichment (Phase 1) ───────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_create_request_defaults_weapons_to_unanalyzed(session):
+    """Legacy callers that don't pass weapons kwargs must get the safe defaults."""
+    from src.db.repositories import EmbeddingRequestRepository
+
+    repo = EmbeddingRequestRepository(session)
+    request = await repo.create_request(
+        evidence_id=f"weapons-default-{uuid4()}",
+        camera_id=str(uuid4()),
+        image_urls=["file:///x.jpg"],
+    )
+    await session.commit()
+
+    assert request.weapon_analyzed is False
+    assert request.has_weapon is False
+    assert request.weapon_classes == []
+    assert request.weapon_max_confidence is None
+    assert request.weapon_summary is None
+
+
+@pytest.mark.asyncio
+async def test_create_request_persists_weapons_fields(session):
+    """Full weapons payload round-trips to the DB."""
+    from src.db.repositories import EmbeddingRequestRepository
+
+    repo = EmbeddingRequestRepository(session)
+    summary = {
+        "images_analyzed": 5,
+        "images_with_detections": 2,
+        "total_detections": 3,
+        "classes_detected": ["handgun", "knife"],
+        "max_confidence": 0.87,
+        "has_weapon": True,
+    }
+    request = await repo.create_request(
+        evidence_id=f"weapons-full-{uuid4()}",
+        camera_id=str(uuid4()),
+        image_urls=["file:///a.jpg", "file:///b.jpg"],
+        weapon_analyzed=True,
+        has_weapon=True,
+        weapon_classes=["handgun", "knife"],
+        weapon_max_confidence=0.87,
+        weapon_summary=summary,
+    )
+    await session.commit()
+
+    found = await repo.get_by_id(request.id)
+    assert found is not None
+    assert found.weapon_analyzed is True
+    assert found.has_weapon is True
+    assert found.weapon_classes == ["handgun", "knife"]
+    assert found.weapon_max_confidence == pytest.approx(0.87)
+    assert found.weapon_summary == summary
+
+
+@pytest.mark.asyncio
+async def test_create_request_analyzed_clean_state(session):
+    """Analyzed but no weapons — the false-positive review queue case."""
+    from src.db.repositories import EmbeddingRequestRepository
+
+    repo = EmbeddingRequestRepository(session)
+    request = await repo.create_request(
+        evidence_id=f"weapons-clean-{uuid4()}",
+        camera_id=str(uuid4()),
+        image_urls=["file:///clean.jpg"],
+        weapon_analyzed=True,
+        has_weapon=False,
+        weapon_classes=[],
+        weapon_max_confidence=None,
+        weapon_summary={
+            "images_analyzed": 1,
+            "images_with_detections": 0,
+            "total_detections": 0,
+            "classes_detected": [],
+            "max_confidence": None,
+            "has_weapon": False,
+        },
+    )
+    await session.commit()
+
+    found = await repo.get_by_id(request.id)
+    assert found.weapon_analyzed is True
+    assert found.has_weapon is False
+    assert found.weapon_classes == []
+    assert found.weapon_summary["has_weapon"] is False
+
+
+@pytest.mark.asyncio
+async def test_weapon_classes_none_normalizes_to_empty_list(session):
+    """Passing None for weapon_classes must not violate NOT NULL."""
+    from src.db.repositories import EmbeddingRequestRepository
+
+    repo = EmbeddingRequestRepository(session)
+    request = await repo.create_request(
+        evidence_id=f"weapons-none-{uuid4()}",
+        camera_id="cam-1",
+        image_urls=[],
+        weapon_classes=None,  # Explicit None
+    )
+    await session.commit()
+    assert request.weapon_classes == []
