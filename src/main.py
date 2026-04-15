@@ -9,6 +9,7 @@ import logging
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -22,6 +23,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from src.api.dependencies import UserContext, get_user_context
+from src.application.helpers.weapon_filters import build_weapon_filter_conditions
 from src.db.repositories import EmbeddingRequestRepository, SearchRequestRepository
 from src.infrastructure.config import get_settings
 from src.infrastructure.database import engine, get_session
@@ -263,6 +265,9 @@ class SearchCreateRequest(BaseModel):
     threshold: float = 0.75
     max_results: int = 50
     metadata: dict | None = None
+    # Weapons filter — see docs/weapons/04_SEARCH_API.md
+    weapons_filter: Literal["all", "only", "exclude", "analyzed_clean"] = "all"
+    weapon_classes: list[str] | None = None
 
 
 @app.post("/api/v1/search", status_code=202)
@@ -278,6 +283,18 @@ async def create_search(
     # Multi-tenant: non-admin users can only search their own evidence
     if ctx.role not in ("admin", "root", "dev"):
         metadata["user_id"] = user_id
+
+    # Weapons filter — stashed in metadata so it survives the GPU round-trip.
+    # See docs/weapons/04_SEARCH_API.md.
+    metadata["weapons_filter"] = body.weapons_filter
+    if body.weapon_classes:
+        if body.weapons_filter != "only":
+            logger.warning(
+                f"Search {search_id}: weapon_classes passed with "
+                f"weapons_filter={body.weapons_filter!r} (only 'only' uses it) — ignoring classes"
+            )
+        else:
+            metadata["weapon_classes"] = list(body.weapon_classes)
 
     # Create DB row (status=TO_WORK)
     async with get_session() as session:
@@ -436,13 +453,16 @@ async def trigger_recalculation(
                 skipped += 1
                 continue
 
-            filter_conditions = None
+            filter_conditions: dict = {}
             if s.search_metadata:
                 filter_conditions = {
-                    k: v for k, v in s.search_metadata.items() if k in ("camera_id", "object_type")
+                    k: v
+                    for k, v in s.search_metadata.items()
+                    if k in ("camera_id", "object_type")
                 }
-                if not filter_conditions:
-                    filter_conditions = None
+                filter_conditions.update(build_weapon_filter_conditions(s.search_metadata))
+            if not filter_conditions:
+                filter_conditions = None
 
             matches = await vector_repo.search_similar(
                 query_vector=np.array(query_vector_list, dtype=np.float32),
