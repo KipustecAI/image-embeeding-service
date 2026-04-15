@@ -20,6 +20,9 @@ class EvidenceEmbeddingRecord(Base):
     image_url = Column(Text, nullable=False)
     json_data = Column(JSONB)
 
+    # Per-image weapon detections — see docs/weapons/01_DATABASE.md
+    weapon_detections = Column(JSONB, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # Relationships

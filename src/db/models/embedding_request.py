@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
@@ -24,6 +24,13 @@ class EmbeddingRequest(Base):
     device_id = Column(String(255), nullable=True)
     app_id = Column(Integer, nullable=True)
     infraction_code = Column(String(255), nullable=True, index=True)
+
+    # Weapons enrichment — see docs/weapons/01_DATABASE.md
+    weapon_analyzed = Column(Boolean, nullable=False, default=False, index=True)
+    has_weapon = Column(Boolean, nullable=False, default=False, index=True)
+    weapon_classes = Column(JSONB, nullable=False, default=list)
+    weapon_max_confidence = Column(Float, nullable=True)
+    weapon_summary = Column(JSONB, nullable=True)
 
     # Worker tracking
     worker_id = Column(String(100))
