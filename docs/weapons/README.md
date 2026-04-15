@@ -30,6 +30,7 @@ Integration of weapon-detection metadata into the existing `embeddings:results` 
 | 3 | [03_CONSUMER.md](03_CONSUMER.md) | `embedding_results_consumer.py` enrichment logic |
 | 4 | [04_SEARCH_API.md](04_SEARCH_API.md) | Request DTO, search use case, filter mapping |
 | 5 | [05_DOCS_AND_VERIFICATION.md](05_DOCS_AND_VERIFICATION.md) | Doc updates + end-to-end verification plan |
+| — | [CONTRACT.md](CONTRACT.md) | **Producer contract** — authoritative spec for the `compute-weapons` team. Field-by-field schema, three worked examples, error semantics, validation rules, versioning policy. |
 
 ## Execution order
 

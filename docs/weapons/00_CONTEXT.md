@@ -60,20 +60,11 @@ Success event (vectors truncated for readability):
 }
 ```
 
-### Important note on `event_type`
+### Important note on `event_type` — resolved in [CONTRACT.md](CONTRACT.md)
 
-The compute-weapons service tags its output as `event_type: "weapons.analyzed"` in the message body, but our consumer registers its handler against `"embeddings.computed"` in the stream envelope (`XADD` key `event_type`). Two possible interpretations:
+The XADD envelope **must** carry `event_type: "embeddings.computed"` (the existing handler registration). The compute-weapons service may put `"event_type": "weapons.analyzed"` inside the JSON body as a trace label if useful for observability, but the backend consumer does not read body-level event types — it dispatches on the envelope.
 
-1. The XADD envelope still carries `event_type: embeddings.computed` (backwards compatible) and only the inner JSON body mentions `weapons.analyzed` as a trace label
-2. The envelope carries `weapons.analyzed` — in which case we'd need to register a second handler
-
-**Decision for this plan:** assume (1) — no new handler registration. If live messages prove otherwise during Phase 3 implementation, we add one line:
-
-```python
-consumer.register_handler("weapons.analyzed", _handle_embeddings_computed)
-```
-
-This is a trivial forward-compatible fix; the payload processing logic is identical.
+Producer-side contract lives in [CONTRACT.md](CONTRACT.md). If the compute-weapons team ever wants to switch to a dedicated envelope event type, that's a breaking change and requires coordinating a second handler registration in the backend first — see CONTRACT.md section 6 ("Versioning").
 
 ## The state cube
 
