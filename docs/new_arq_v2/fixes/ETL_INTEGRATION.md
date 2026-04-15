@@ -90,7 +90,9 @@ image-embeeding-service (Backend)
      2. Download ZIP from zip_url
      3. Extract ONLY the images listed in embeddings[].image_name
      4. Upload each image to storage service:
-        POST http://storage-service:8080/api/v1/upload/file
+        POST http://storage-service:8006/api/v1/upload/file
+          Headers: X-User-Id: <user_id or "embedding-service">
+                   X-User-Role: dev
           file=<image bytes>
           folder=embeddings/{camera_id}/{evidence_id}
         → response: {public_url: "http://minio:9000/lucam-assets/embeddings/.../frame_001.jpg"}
@@ -204,23 +206,27 @@ self.client.create_payload_index(
 
 #### `src/services/storage_uploader.py` (NEW)
 
-Uploads images to the storage service via Docker network DNS.
+Uploads images to the storage service via Docker network DNS (direct, no gateway).
 
 ```python
 import httpx
 
 class StorageUploader:
-    def __init__(self, base_url: str = "http://storage-service:8080"):
+    def __init__(self, base_url: str = "http://storage-service:8006"):
         self.base_url = base_url
         self.upload_url = f"{base_url}/api/v1/upload/file"
 
     async def upload_image(
-        self, image_bytes: bytes, filename: str, folder: str
+        self, image_bytes: bytes, filename: str, folder: str, user_id: str = "embedding-service"
     ) -> str | None:
         """Upload image to storage service, return public_url."""
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(
                 self.upload_url,
+                headers={
+                    "X-User-Id": user_id,
+                    "X-User-Role": "dev",
+                },
                 files={"file": (filename, image_bytes, "image/jpeg")},
                 data={"folder": folder, "storage": "minio"},
             )
@@ -230,6 +236,8 @@ class StorageUploader:
                     return data["public_url"]
         return None
 ```
+
+The storage service normally lives behind the API Gateway (which injects user context headers), but this service talks to it **directly** on the Docker network, so we must inject `X-User-Id` and `X-User-Role` ourselves.
 
 #### `src/services/zip_processor.py` (NEW)
 
@@ -353,7 +361,7 @@ Add storage service URL:
 
 ```python
 storage_service_url: str = Field(
-    "http://storage-service:8080",
+    "http://storage-service:8006",
     validation_alias="STORAGE_SERVICE_URL",
 )
 ```
@@ -361,9 +369,9 @@ storage_service_url: str = Field(
 #### `.env` / `.env.dev` / `.env.example`
 
 ```
-STORAGE_SERVICE_URL=http://storage-service:8080  # Docker network DNS
+STORAGE_SERVICE_URL=http://storage-service:8006  # Docker network DNS (direct, no gateway)
 # For local dev (if storage service runs on host):
-# STORAGE_SERVICE_URL=http://localhost:8080
+# STORAGE_SERVICE_URL=http://localhost:8006
 ```
 
 ---

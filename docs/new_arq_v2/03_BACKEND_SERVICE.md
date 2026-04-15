@@ -15,24 +15,36 @@ Consumes computed vectors from the GPU service and:
 
 ## Processing Flows
 
-### Receive Embedding Results (direct storage, no ARQ)
+### Receive Embedding Results (ZIP flow + direct storage, no ARQ)
 
 ```
 embeddings:results stream
        │
-       │ {evidence_id, camera_id, embeddings: [{image_url, vector, image_index}, ...]}
+       │ {evidence_id, camera_id, user_id, device_id, app_id,
+       │  infraction_code, zip_url,
+       │  embeddings: [{image_name, vector, image_index}, ...]}
        ▼
   StreamConsumer (daemon thread)
        │
-       ├─ Create embedding_request row (status=TO_WORK) if not exists
+       ├─ Dedup check on evidence_id
+       ├─ Download ZIP from zip_url (ZipProcessor)
+       ├─ Extract only frames listed in embeddings[].image_name
+       ├─ Upload each frame to storage service → permanent MinIO URL
+       │    POST http://storage-service:8006/api/v1/upload/file
+       │    Headers: X-User-Id, X-User-Role: dev
        ├─ For each embedding:
        │    ├─ Upsert vector directly to Qdrant (~70ms)
+       │    │   Payload: {evidence_id, camera_id, user_id, device_id,
+       │    │             app_id, image_url: <permanent>, image_index,
+       │    │             source_type: "evidence"}
        │    └─ Create evidence_embedding DB record
-       ├─ Update embedding_request → EMBEDDED
+       ├─ Create embedding_request row with ETL metadata
+       │  (user_id, device_id, app_id, infraction_code, image_urls=[...])
+       ├─ Mark request as EMBEDDED
        └─ XACK original message
 ```
 
-No BatchTrigger. No ARQ queue. The consumer stores vectors inline for speed (~70ms total vs 5-30s with the old ARQ chain).
+No BatchTrigger. No ARQ queue. The consumer downloads the ZIP, uploads extracted frames to storage, and writes Qdrant + PostgreSQL inline (~300-500ms total including upload, vs 5-30s with the old ARQ chain).
 
 ### Receive Search Results (direct storage, no ARQ)
 
@@ -103,31 +115,60 @@ embeddings:results / search:results stream
 
 ### embedding_results_consumer.py
 
-Consumes `embeddings:results` from GPU. Stores vectors **directly** in Qdrant + creates DB rows in one flow:
+Consumes `embeddings:results` from GPU. Downloads the source ZIP, uploads frames to the storage service, then upserts vectors directly to Qdrant + PostgreSQL in one flow:
 
 ```python
-async def _process_embedding_result(payload, message_id):
+async def _process_embeddings_result(payload, message_id):
     evidence_id = payload["evidence_id"]
     camera_id = payload["camera_id"]
-    embeddings = payload["embeddings"]
+    zip_url = payload.get("zip_url")
+    user_id = payload.get("user_id")
+    device_id = payload.get("device_id")
+    app_id = payload.get("app_id")
+    infraction_code = payload.get("infraction_code")
+    embeddings_data = payload.get("embeddings", [])
 
+    # Dedup
     async with get_session() as session:
         repo = EmbeddingRequestRepository(session)
-        if not await repo.check_duplicate(evidence_id):
-            await repo.create_request(...)
+        if await repo.check_duplicate(evidence_id):
+            return
 
-    # Direct Qdrant upsert — no ARQ queue
-    for emb in embeddings:
+    # 1. Download ZIP → extract filtered frames → upload to storage
+    uploaded_urls: dict[str, str] = {}  # image_name → public_url
+    if zip_url and _storage_uploader:
+        image_names = [e["image_name"] for e in embeddings_data]
+        image_map = await _zip_processor.download_and_extract(zip_url, image_names)
+        folder = f"embeddings/{camera_id}/{evidence_id}"
+        for name, img_bytes in image_map.items():
+            public_url = await _storage_uploader.upload_image(
+                img_bytes, name, folder, user_id=user_id or "embedding-service"
+            )
+            if public_url:
+                uploaded_urls[name] = public_url
+
+    # 2. Upsert vectors to Qdrant with multi-tenant payload
+    for emb in embeddings_data:
         point_id = str(uuid4())
+        image_url = uploaded_urls.get(emb["image_name"], "")
         await vector_repo.store_embedding(ImageEmbedding(
             id=point_id,
-            vector=np.array(emb["vector"]),
-            metadata={...},
+            vector=np.array(emb["vector"], dtype=np.float32),
+            metadata={
+                "evidence_id": evidence_id,
+                "camera_id": camera_id,
+                "user_id": user_id,
+                "device_id": device_id,
+                "app_id": app_id,
+                "image_url": image_url,
+                "image_index": emb.get("image_index", 0),
+                "source_type": "evidence",
+            },
         ))
-        # Create evidence_embedding DB record
+        # Create evidence_embedding DB record linked to the request
         ...
 
-    # Update request → EMBEDDED
+    # 3. Create embedding_request row with ETL metadata → mark EMBEDDED
 ```
 
 ### search_results_consumer.py

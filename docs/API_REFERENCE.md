@@ -324,7 +324,7 @@ Uses stored query vectors — no GPU, no image re-download. ~100ms per search.
 
 | Collection | Purpose |
 |------------|---------|
-| `evidence_embeddings` | Evidence image vectors (512-dim CLIP ViT-B-32, cosine distance). Payload indices on `camera_id`, `evidence_id`, `source_type` |
+| `evidence_embeddings` | Evidence image vectors (512-dim CLIP ViT-B-32, cosine distance). Payload indices on `evidence_id`, `camera_id`, `source_type`, `user_id`, `device_id`, `app_id` (multi-tenant filtering) |
 | `search_queries` | Stored query vectors for recalculation. One point per search, payload: `search_id` only |
 
 ## Database Tables

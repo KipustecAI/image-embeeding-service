@@ -195,10 +195,20 @@ Work enters the service via Redis Streams from the GPU compute service. For manu
 
 ### Publish embedding result (bypass GPU)
 
+The payload must include all ETL metadata fields (`user_id`, `device_id`, `app_id`, `infraction_code`, `zip_url`) and `embeddings[].image_name` — the backend will download the ZIP, extract the named frames, upload them to the storage service, and produce permanent URLs.
+
 ```bash
 docker exec embedding-redis redis-cli -n 3 XADD embeddings:results '*' \
   event_type embeddings.computed \
-  payload '{"evidence_id":"test-001","camera_id":"cam-001","embeddings":[{"image_url":"https://example.com/img.jpg","image_index":0,"vector":[0.01,0.02,...512 floats...],"total_images":1}],"input_count":1,"filtered_count":1,"embedded_count":1}'
+  payload '{"evidence_id":"test-001","camera_id":"cam-001","user_id":"user-001","device_id":"dev-001","app_id":1,"infraction_code":"TEST-001","zip_url":"https://minio.lookia.mx/lucam-assets/test.zip","embeddings":[{"image_name":"frame_001.jpg","image_index":0,"vector":[0.01,0.02,...512 floats...]}],"input_count":1,"filtered_count":1,"embedded_count":1}'
+```
+
+### Publish compute error (bypass GPU)
+
+```bash
+docker exec embedding-redis redis-cli -n 3 XADD embeddings:results '*' \
+  event_type compute.error \
+  payload '{"entity_id":"test-001","entity_type":"evidence","error":"No images downloadable"}'
 ```
 
 ### Inspect streams

@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-**One job:** Receive image URLs → download → diversity filter → CLIP inference → publish vectors.
+**One job:** Receive a ZIP URL → download → extract frames → diversity filter → CLIP inference → publish vectors.
 
 No database. No Qdrant. No pipeline state. Completely stateless.
 
@@ -13,21 +13,27 @@ No database. No Qdrant. No pipeline state. Completely stateless.
 ```
 evidence:embed stream
        │
-       │ {evidence_id, camera_id, image_urls: [...]}
+       │ {evidence_id, camera_id, user_id, device_id, app_id,
+       │  infraction_code, zip_url}
        ▼
   StreamConsumer (daemon thread)
        │
-       ├─ Download all images (async, overlap with next batch)
+       ├─ Download ZIP from zip_url
+       ├─ Extract image frames (jpg, png) to memory/tempdir
        ├─ Diversity filter (Bhattacharyya, skip duplicates)
        ├─ CLIP inference (batch, GPU)
        │
        ▼
   Publish to embeddings:results stream
        │
-       │ {evidence_id, camera_id, embeddings: [{image_url, vector, image_index}, ...]}
+       │ {evidence_id, camera_id, user_id, device_id, app_id,
+       │  infraction_code, zip_url,
+       │  embeddings: [{image_name, vector, image_index}, ...]}
        ▼
   XACK original message
 ```
+
+Note: the compute service publishes `image_name` (the filename inside the ZIP), **not** a URL. The backend is responsible for downloading the ZIP again, extracting the filtered frames by name, uploading them to the storage service, and producing permanent MinIO URLs.
 
 ### Search Query
 
@@ -55,56 +61,65 @@ The compute service should overlap image downloads with GPU inference (Option C 
 
 ```python
 class EvidenceComputeHandler:
-    """Downloads images and runs CLIP inference with I/O overlap."""
+    """Downloads ZIP, extracts frames, runs CLIP inference with I/O overlap."""
 
     async def process_evidence(self, payload: dict, message_id: str):
         evidence_id = payload["evidence_id"]
         camera_id = payload["camera_id"]
-        raw_urls = payload.get("image_urls", [])
+        zip_url = payload.get("zip_url")
 
-        # Step 1: Diversity filter (downloads + histogram comparison)
-        filtered_urls = await self.diversity_filter.filter_image_urls(raw_urls)
-        if not filtered_urls:
-            logger.warning(f"No images passed diversity filter for {evidence_id}")
+        if not zip_url:
+            logger.warning(f"Skipping evidence {evidence_id}: no zip_url")
             return
 
-        # Step 2: Download filtered images (async, all at once)
-        images = await self.downloader.download_batch(filtered_urls)
-        valid_images = [(url, img) for url, img in zip(filtered_urls, images) if img is not None]
+        # Step 1: Download ZIP + extract frames (filename, PIL.Image)
+        frames = await self.zip_handler.download_and_extract(zip_url)
+        if not frames:
+            await self.producer.publish_error(
+                "embeddings:results", evidence_id, "No images downloadable"
+            )
+            return
 
-        if not valid_images:
-            logger.error(f"No images downloadable for {evidence_id}")
-            # Publish error result so backend knows
-            await self.producer.publish_error("embeddings:results", evidence_id, "No images downloadable")
+        # Step 2: Diversity filter (histogram comparison on extracted frames)
+        filtered = self.diversity_filter.filter_images(frames)
+        if not filtered:
+            await self.producer.publish_error(
+                "embeddings:results", evidence_id, "No images passed diversity filter"
+            )
             return
 
         # Step 3: CLIP batch inference
-        pil_images = [img for _, img in valid_images]
+        pil_images = [img for _, img in filtered]
         vectors = self.embedder.encode_batch(pil_images)
 
-        # Step 4: Build result payload
-        embeddings = []
-        for idx, ((url, _), vector) in enumerate(zip(valid_images, vectors)):
-            embeddings.append({
-                "image_url": url,
+        # Step 4: Build result payload — image_name, not image_url
+        embeddings = [
+            {
+                "image_name": name,
                 "image_index": idx,
-                "vector": vector.tolist(),      # 512 floats
-                "total_images": len(valid_images),
-            })
+                "vector": vector.tolist(),  # 512 floats
+            }
+            for idx, ((name, _), vector) in enumerate(zip(filtered, vectors))
+        ]
 
-        # Step 5: Publish to output stream
+        # Step 5: Publish to output stream — pass through all ETL metadata
         await self.producer.publish("embeddings:results", {
             "event_type": "embeddings.computed",
             "evidence_id": evidence_id,
             "camera_id": camera_id,
+            "user_id": payload.get("user_id"),
+            "device_id": payload.get("device_id"),
+            "app_id": payload.get("app_id"),
+            "infraction_code": payload.get("infraction_code"),
+            "zip_url": zip_url,
             "embeddings": embeddings,
-            "input_count": len(raw_urls),
-            "filtered_count": len(filtered_urls),
+            "input_count": len(frames),
+            "filtered_count": len(filtered),
             "embedded_count": len(embeddings),
         })
 
         logger.info(
-            f"Evidence {evidence_id}: {len(raw_urls)} → {len(filtered_urls)} filtered → "
+            f"Evidence {evidence_id}: {len(frames)} → {len(filtered)} filtered → "
             f"{len(embeddings)} embedded"
         )
 ```
