@@ -31,6 +31,9 @@ class EmbeddingRequest(Base):
     weapon_classes = Column(JSONB, nullable=False, default=list)
     weapon_max_confidence = Column(Float, nullable=True)
     weapon_summary = Column(JSONB, nullable=True)
+    # Failure reason when compute-weapons attempted analysis but failed.
+    # Distinguishes "attempted-and-failed" from "never attempted". See CONTRACT.md §5.
+    weapon_analysis_error = Column(Text, nullable=True)
 
     # Worker tracking
     worker_id = Column(String(100))

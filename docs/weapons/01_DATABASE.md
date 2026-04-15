@@ -40,6 +40,7 @@ Column rationale:
 | `weapon_classes` | `JSONB` | `NOT NULL` | `[]` | List of class names detected. GIN index optional — only add if reports grow slow |
 | `weapon_max_confidence` | `FLOAT` | `NULL` | — | Peak confidence across all detections for this evidence; enables sort/threshold queries |
 | `weapon_summary` | `JSONB` | `NULL` | — | Raw summary block preserved verbatim — cheap insurance against summary-shape evolution upstream |
+| `weapon_analysis_error` | `TEXT` | `NULL` | — | **Added in migration `c8e5a7b2d4f9`.** Failure reason captured from the producer's root-level `weapon_analysis_error: {"message": ...}` field. Distinguishes "attempted and failed" from "never attempted". No index — queried ad-hoc by ops, not on hot paths. See [CONTRACT.md §5.1](CONTRACT.md). |
 
 ### `EvidenceEmbeddingRecord` — per-image bbox detail
 

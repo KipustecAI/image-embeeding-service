@@ -57,6 +57,7 @@ class EmbeddingRequestRepository:
         weapon_classes: list[str] | None = None,
         weapon_max_confidence: float | None = None,
         weapon_summary: dict | None = None,
+        weapon_analysis_error: str | None = None,
     ) -> EmbeddingRequest:
         """Create new embedding request at status=1."""
         request = EmbeddingRequest(
@@ -73,6 +74,7 @@ class EmbeddingRequestRepository:
             weapon_classes=weapon_classes or [],
             weapon_max_confidence=weapon_max_confidence,
             weapon_summary=weapon_summary,
+            weapon_analysis_error=weapon_analysis_error,
         )
         self.session.add(request)
         await self.session.flush()

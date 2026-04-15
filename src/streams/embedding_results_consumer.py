@@ -107,6 +107,15 @@ async def _process_embeddings_result(payload: dict, message_id: str):
         if "image_name" in img
     }
 
+    # Root-level weapons failure signal (producer pass-through path). Capturing
+    # this lets us distinguish "attempted and failed" from "never attempted".
+    # See docs/weapons/CONTRACT.md §5 (tolerated root-level extensions).
+    weapon_error_block = payload.get("weapon_analysis_error") or {}
+    weapon_error_message = (
+        weapon_error_block.get("message") if isinstance(weapon_error_block, dict) else None
+    )
+    trace_event = payload.get("trace_event")
+
     if not evidence_id or not embeddings_data:
         logger.warning(f"Skipping result with missing data: evidence_id={evidence_id}")
         return
@@ -204,6 +213,7 @@ async def _process_embeddings_result(payload: dict, message_id: str):
                 weapon_classes=list(weapon_summary.get("classes_detected") or []),
                 weapon_max_confidence=weapon_summary.get("max_confidence"),
                 weapon_summary=weapon_summary or None,
+                weapon_analysis_error=weapon_error_message,
             )
 
             # Link DB records to the request
@@ -221,7 +231,9 @@ async def _process_embeddings_result(payload: dict, message_id: str):
             f"uploaded={len(uploaded_urls)}, "
             f"weapon_analyzed={weapon_analyzed}, "
             f"has_weapon={bool(weapon_summary.get('has_weapon', False))}, "
-            f"detections={weapon_summary.get('total_detections', 0)})"
+            f"detections={weapon_summary.get('total_detections', 0)}, "
+            f"trace_event={trace_event!r}, "
+            f"weapon_error={weapon_error_message!r})"
         )
 
     except Exception as e:
