@@ -14,7 +14,6 @@ from src.application.helpers.weapon_filters import (
     build_weapon_filter_conditions,
 )
 
-
 # ── Core modes ──────────────────────────────────────────────────────────────
 
 
