@@ -56,17 +56,13 @@ def test_mode_only_with_multiple_classes():
 
 def test_mode_only_with_empty_classes_list_omits_key():
     """Empty list must not emit a weapon_classes condition (would match nothing)."""
-    result = build_weapon_filter_conditions(
-        {"weapons_filter": "only", "weapon_classes": []}
-    )
+    result = build_weapon_filter_conditions({"weapons_filter": "only", "weapon_classes": []})
     assert result == {"has_weapon": True}
     assert "weapon_classes" not in result
 
 
 def test_mode_only_with_none_classes_omits_key():
-    result = build_weapon_filter_conditions(
-        {"weapons_filter": "only", "weapon_classes": None}
-    )
+    result = build_weapon_filter_conditions({"weapons_filter": "only", "weapon_classes": None})
     assert result == {"has_weapon": True}
 
 
@@ -110,9 +106,10 @@ def test_classes_without_only_mode_are_ignored():
         {"weapons_filter": "analyzed_clean", "weapon_classes": ["handgun"]}
     ) == {"weapon_analyzed": True, "has_weapon": False}
     # all
-    assert build_weapon_filter_conditions(
-        {"weapons_filter": "all", "weapon_classes": ["handgun"]}
-    ) == {}
+    assert (
+        build_weapon_filter_conditions({"weapons_filter": "all", "weapon_classes": ["handgun"]})
+        == {}
+    )
 
 
 def test_unrelated_metadata_keys_do_not_leak():

@@ -111,9 +111,7 @@ class QdrantVectorRepository(VectorRepository):
             logger.error(f"Failed to initialize Qdrant: {e}")
             raise
 
-    def _ensure_payload_indices(
-        self, collection_name: str, indices: list[tuple[str, str]]
-    ) -> None:
+    def _ensure_payload_indices(self, collection_name: str, indices: list[tuple[str, str]]) -> None:
         """Create payload indices idempotently. Safe to call on every startup.
 
         Qdrant's create_payload_index is a no-op on existing indices in newer
@@ -205,9 +203,7 @@ class QdrantVectorRepository(VectorRepository):
                 must_conditions = []
                 for field, value in filter_conditions.items():
                     if isinstance(value, list):
-                        must_conditions.append(
-                            FieldCondition(key=field, match=MatchAny(any=value))
-                        )
+                        must_conditions.append(FieldCondition(key=field, match=MatchAny(any=value)))
                     else:
                         must_conditions.append(
                             FieldCondition(key=field, match=MatchValue(value=value))

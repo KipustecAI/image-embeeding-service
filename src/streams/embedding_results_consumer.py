@@ -151,9 +151,9 @@ async def _process_embeddings_result(payload: dict, message_id: str):
             # Per-image weapon enrichment — see docs/weapons/03_CONSUMER.md
             per_image_detections = detections_by_name.get(image_name, [])
             per_image_has_weapon = weapon_analyzed and len(per_image_detections) > 0
-            per_image_classes = sorted({
-                d["class_name"] for d in per_image_detections if d.get("class_name")
-            })
+            per_image_classes = sorted(
+                {d["class_name"] for d in per_image_detections if d.get("class_name")}
+            )
 
             embedding = ImageEmbedding.from_evidence(
                 evidence_id=evidence_id,

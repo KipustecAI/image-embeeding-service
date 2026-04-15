@@ -456,9 +456,7 @@ async def trigger_recalculation(
             filter_conditions: dict = {}
             if s.search_metadata:
                 filter_conditions = {
-                    k: v
-                    for k, v in s.search_metadata.items()
-                    if k in ("camera_id", "object_type")
+                    k: v for k, v in s.search_metadata.items() if k in ("camera_id", "object_type")
                 }
                 filter_conditions.update(build_weapon_filter_conditions(s.search_metadata))
             if not filter_conditions:
