@@ -68,15 +68,18 @@ Producer-side contract lives in [CONTRACT.md](CONTRACT.md). If the compute-weapo
 
 ## The state cube
 
-Each image can be in exactly one of three reachable states:
+Originally designed as a two-boolean cube with three reachable states. After capturing the producer's failure pass-through field ([`weapon_analysis_error`](CONTRACT.md#51-the-fourth-reachable-state-attempted-failed)), there are now **four reachable states**, distinguished by a third axis (the error column):
 
-| `weapon_analyzed` | `has_weapon` | Meaning | Example use case |
-|---|---|---|---|
-| `false` | `false` | Never analyzed — legacy image or routing skipped compute-weapons | Broad similarity search, backward compatibility |
-| `true` | `false` | Analyzed, nothing detected | **False-positive review queue** — humans audit these for missed weapons |
-| `true` | `true` | Analyzed with at least one detection | Weapon flagging, reports, alerts |
+| `weapon_analyzed` | `has_weapon` | `weapon_analysis_error` | Meaning | Example use case |
+|---|---|---|---|---|
+| `false` | `false` | `NULL` | Never analyzed — legacy image or routing skipped compute-weapons | Broad similarity search, backward compatibility |
+| `false` | `false` | `"reason"` | **Attempted and failed** — compute-weapons tried but broke (ZIP timeout, model OOM, corrupt archive, etc.) | Ops observability queries, retry candidates |
+| `true` | `false` | `NULL` | Analyzed, nothing detected | **False-positive review queue** — humans audit these for missed weapons |
+| `true` | `true` | `NULL` | Analyzed with at least one detection | Weapon flagging, reports, alerts |
 
-The `(false, true)` combination is impossible by construction: we only set `has_weapon=true` when `weapon_analyzed=true`.
+The `(false, true)` combination is impossible by construction: we only set `has_weapon=true` when `weapon_analyzed=true`. The error column only carries a value for the "attempted, failed" row — in every other state it is `NULL`.
+
+The error-state row is new (added via migration `c8e5a7b2d4f9`) and only exists for messages produced after the compute-weapons service started publishing `weapon_analysis_error` at the payload root. See [CONTRACT.md §5.1](CONTRACT.md) for the producer contract and ops query.
 
 ## Decisions log
 
@@ -95,6 +98,8 @@ A single `has_weapon: bool | null` collapses two meaningfully different states i
 The user's false-positive review workflow specifically needs to find the "analyzed and clean" set so humans can reclassify potential false negatives. A nullable bool can't express that intent as a queryable index.
 
 Qdrant-side argument: `MatchValue` works cleanly on scalars; filtering on "field is not null" uses `IsEmptyCondition`, which is awkward and undermines payload-index performance. Two booleans keep the filter path identical to the existing `user_id`/`device_id` pattern.
+
+**Post-hoc validation:** this decision held up when the producer later started publishing `weapon_analysis_error` for the failure path. A nullable-bool design would have needed a third state in `has_weapon` itself ("was attempted but broke"), which is ontologically a failure mode, not a detection result. Instead, the error lives on its own TEXT column and is orthogonal to the detection state — the existing filter semantics keep working unchanged, and the error state is expressible via `weapon_analysis_error IS NOT NULL` without touching the Qdrant index. Two booleans + one orthogonal column > one nullable bool.
 
 ### Why `keyword[]` for `weapon_classes`, not an enum or separate table?
 

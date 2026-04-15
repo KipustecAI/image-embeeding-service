@@ -278,8 +278,51 @@ These are frozen behaviors the backend guarantees. If a rule becomes inconvenien
 | `bbox` missing or partial | Detection kept in JSONB but marked malformed in logs | Audit trail preserved |
 | Unknown top-level fields in `weapon_analysis` | Silently ignored | Forward compat |
 | Unknown fields in `detections[N]` | Preserved verbatim in `weapon_detections` JSONB | Forward compat |
+| **Unknown root-level fields** (e.g. `trace_event`) | Silently ignored | The consumer uses explicit `payload.get(...)` per known field; anything else is dropped without error. Producers can add observability fields at the root freely. |
+| `weapon_analysis_error: {"message": "..."}` at root | **Captured** into `embedding_requests.weapon_analysis_error` column | Producer's failure pass-through path. See §5.1 below. |
+| `trace_event: "weapons.analyzed"` / `"weapons.failed"` at root | Logged, not persisted | Producer trace label for observability. Redundant with other fields (presence of `weapon_analysis` or `weapon_analysis_error`). |
 
-The backend's parsing code lives in [src/streams/embedding_results_consumer.py:100-108](../../src/streams/embedding_results_consumer.py#L100-L108) and [`_process_embeddings_result` body](../../src/streams/embedding_results_consumer.py#L89-L216). The edge-case table in [03_CONSUMER.md](03_CONSUMER.md) is the same information from the consumer's perspective.
+### 5.1 The fourth reachable state: "attempted, failed"
+
+Since Phase 1 of the weapons enrichment, the backend has tracked three states via the two-boolean cube (`weapon_analyzed` × `has_weapon`). Capturing `weapon_analysis_error` adds a fourth reachable state that distinguishes "never attempted" from "attempted and failed" — both of which have `weapon_analyzed=false, has_weapon=false`, but mean very different things operationally.
+
+| State | `weapon_analyzed` | `has_weapon` | `weapon_analysis_error` | Meaning |
+|---|---|---|---|---|
+| Legacy / skipped | `false` | `false` | `NULL` | Never went through compute-weapons (routing bypass or pre-rollout) |
+| **Attempted, failed** | `false` | `false` | `"reason"` | **New.** compute-weapons tried but hit a ZIP timeout, OOM, corrupt archive, etc. |
+| Analyzed clean | `true` | `false` | `NULL` | Analyzed, no detections. Powers the false-positive review queue. |
+| Weapons detected | `true` | `true` | `NULL` | Analyzed with at least one detection. |
+
+**Producer contract for the failed state** (lives in the [`image-weapons-compute` contract §3.2](../../../image-weapons-compute/docs/CONTRACT.md)):
+
+- `weapon_analysis` block is **dropped entirely** — the backend falls through to the legacy-shaped payload path.
+- `weapon_analysis_error: {"message": "<reason>"}` is added at the payload root.
+- `trace_event: "weapons.failed"` may also be added at the root (observability only).
+- All other fields are preserved unchanged.
+
+**Backend handling:**
+- Consumer extracts `payload["weapon_analysis_error"]["message"]` defensively (tolerates `None`, `{}`, and non-dict values by treating them as "no error").
+- The error message is stored in `embedding_requests.weapon_analysis_error` (TEXT, NULL = no error).
+- `weapon_analyzed=false` is the correct value — compute-weapons did **not** successfully analyze the images. The error column is the signal that it was attempted.
+- No impact on Qdrant payload or `evidence_embeddings` — the failure is an evidence-level fact, not per-image.
+
+**Operational query:**
+```sql
+-- Most common weapon-analysis errors in the last 7 days
+SELECT weapon_analysis_error, COUNT(*) AS n
+FROM embedding_requests
+WHERE weapon_analysis_error IS NOT NULL
+  AND created_at > NOW() - INTERVAL '7 days'
+GROUP BY 1
+ORDER BY 2 DESC;
+```
+
+**Non-goals for this column:**
+- No structured error code / type — producers publish free-text messages because error taxonomies drift faster than DB schemas.
+- No retry state machine — the column is a record of what happened, not a queue. If we ever add a retry worker, it would read from this column but not write to it.
+- No alerting integration — that's a separate pipeline on top of the column.
+
+The backend's parsing code lives in [src/streams/embedding_results_consumer.py:89-216](../../src/streams/embedding_results_consumer.py#L89-L216). The edge-case table in [03_CONSUMER.md](03_CONSUMER.md) is the same information from the consumer's perspective.
 
 ---
 
@@ -299,12 +342,21 @@ The transition window for any breaking change is **at least one business day**. 
 
 ---
 
-## 7. Open questions & non-commitments
+## 7. Open questions, non-commitments & resolved items
 
-- **Model version tagging.** The payload currently doesn't carry a `model_version` or `model_id` field. If we ever need to distinguish "analyzed by model v1" from "analyzed by model v2" for reclassification decisions, we'll add it to `summary` as an additive field. Producer should be prepared to start sending it when the backend asks.
+### Resolved
+
+- **[RESOLVED] Model version tagging.** The producer now publishes `summary.model_version` as a dict with three keys: `model_a`, `model_b`, `person_model` (e.g. `{"model_a": "persona_armada_1label_V1", "model_b": "armas_v202", "person_model": "yolo11s"}`). The backend stores the full `summary` block verbatim in `embedding_requests.weapon_summary` JSONB, so `model_version` is available for post-hoc traceability without any backend code change. No dedicated column — query it via `weapon_summary->'model_version'`.
+- **[RESOLVED] Per-detection `source` field.** The producer now publishes `detections[N].source: "model_a" | "model_b"` indicating which detector found the instance. The backend stores the full `detections[]` list verbatim in `evidence_embeddings.weapon_detections` JSONB, so `source` flows through automatically — forward-compat behavior (per §5, "unknown fields in `detections[N]` preserved verbatim").
+- **[RESOLVED] Root-level extension fields.** The producer's `image-weapons-compute` contract §3.2 asked whether the backend tolerates root-level fields like `trace_event` and `weapon_analysis_error`. Answer: **yes**. The consumer uses explicit `payload.get(...)` per known field, so unknown root keys are silently dropped — no rejection, no dead-letter. Additionally, `weapon_analysis_error` is **not just tolerated but captured** into a dedicated column (§5.1). `trace_event` is logged but not persisted.
+
+### Open
+
 - **Per-class confidence thresholds.** The backend stores whatever the producer publishes. If product decides "handguns need 0.9, knives need 0.7", that's a producer-side policy — the backend is not the right enforcement point.
 - **Throttling.** If compute-weapons falls behind, it does not delay the embedding pipeline — producers may publish the legacy (no `weapon_analysis`) shape temporarily, and those messages take the backwards-compat path. This is an acceptable degradation.
 - **Historical backfill.** Re-analyzing existing evidences after a model upgrade is explicitly **not** in scope for this pipeline. It's a separate job that would XADD synthetic `embeddings.computed` messages with fresh `weapon_analysis` blocks. The backend's dedup check on `evidence_id` would refuse them — so backfill requires a separate entry point or a deliberate bypass flag. We'll design that when we need it.
+- **Bbox oriented boxes (OBB).** The producer's contract §7 flags that Model B is OBB internally but publishes axis-aligned envelopes. If downstream UI ever needs oriented polygons, the producer will add `bbox_obb: {cx, cy, w, h, angle}` as an additive field on `detections[]`. No backend change needed — it'll flow through the JSONB column automatically.
+- **`global_score` promotion.** Today it's producer-internal (used for alerting thresholds). If product wants evidence-level scoring for sorting/reports, promote to `summary.global_score` via the additive change path in §6.
 
 ---
 
@@ -319,6 +371,12 @@ Before publishing a message with `weapon_analysis`, verify:
 - [ ] `summary.has_weapon` equals `total_detections > 0`
 - [ ] `summary.classes_detected` is the deduplicated union of all `detections[*].class_name`
 - [ ] `bbox` coordinates are absolute pixels, not normalized `0..1`
-- [ ] On weapons failure, the `weapon_analysis` block is omitted entirely (not sent as empty or synthetic)
 
-If all eight boxes check, the backend will ingest the message, persist the data to all three stores, and expose it through the search API's `weapons_filter` modes without any further coordination.
+Before publishing a **failed** message (weapons analysis was attempted but broke):
+
+- [ ] `weapon_analysis` block is omitted entirely (not sent as empty or synthetic)
+- [ ] `weapon_analysis_error: {"message": "<short reason>"}` is added at the payload root
+- [ ] `trace_event: "weapons.failed"` may be added at the root for observability (optional, logged but not persisted)
+- [ ] All other canonical fields are preserved unchanged
+
+If these boxes check, the backend will ingest the message, persist the data to the appropriate stores, and (in the success case) expose it through the search API's `weapons_filter` modes. Failed messages become queryable via the `weapon_analysis_error IS NOT NULL` predicate for ops reporting.
