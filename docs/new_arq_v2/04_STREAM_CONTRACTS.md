@@ -91,6 +91,41 @@ Notes:
 - `image_index`: position after filtering, not in the original ZIP listing
 - All ETL metadata (`user_id`, `device_id`, `app_id`, `infraction_code`, `zip_url`) is required — the backend relies on it for storage upload path, Qdrant payload, and DB row creation
 
+### Optional: `weapon_analysis` enrichment
+
+If the message was routed through the `compute-weapons` service, the payload includes an optional `weapon_analysis` block alongside the fields above:
+
+```json
+{
+  "weapon_analysis": {
+    "images": [
+      {
+        "image_name": "20260410-100150_023389.jpg",
+        "image_index": 0,
+        "detections": [
+          {
+            "class_name": "handgun",
+            "class_id": 0,
+            "confidence": 0.873,
+            "bbox": { "x1": 412, "y1": 188, "x2": 596, "y2": 402 }
+          }
+        ]
+      }
+    ],
+    "summary": {
+      "images_analyzed": 9,
+      "images_with_detections": 2,
+      "total_detections": 3,
+      "classes_detected": ["handgun", "knife"],
+      "max_confidence": 0.873,
+      "has_weapon": true
+    }
+  }
+}
+```
+
+The block is **optional and backwards compatible** — producers that omit it are handled on the legacy path. When present, the backend persists per-image detections to `evidence_embeddings.weapon_detections`, evidence-level summary to `embedding_requests`, and per-image flags (`weapon_analyzed`, `has_weapon`, `weapon_classes`) into the Qdrant point payload for search-time filtering. See [../weapons/](../weapons/) for the full enrichment contract and storage design.
+
 ### Error
 
 ```json
