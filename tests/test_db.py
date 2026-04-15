@@ -206,3 +206,104 @@ async def test_weapon_classes_none_normalizes_to_empty_list(session):
     )
     await session.commit()
     assert request.weapon_classes == []
+
+
+@pytest.mark.asyncio
+async def test_weapon_analysis_error_defaults_to_null(session):
+    """Legacy callers that don't pass weapon_analysis_error leave it NULL."""
+    from src.db.repositories import EmbeddingRequestRepository
+
+    repo = EmbeddingRequestRepository(session)
+    request = await repo.create_request(
+        evidence_id=f"weapons-err-null-{uuid4()}",
+        camera_id="cam-1",
+        image_urls=[],
+    )
+    await session.commit()
+    assert request.weapon_analysis_error is None
+
+
+@pytest.mark.asyncio
+async def test_weapon_analysis_error_persists(session):
+    """Error message round-trips to the DB as a plain TEXT column."""
+    from src.db.repositories import EmbeddingRequestRepository
+
+    repo = EmbeddingRequestRepository(session)
+    request = await repo.create_request(
+        evidence_id=f"weapons-err-{uuid4()}",
+        camera_id="cam-1",
+        image_urls=[],
+        weapon_analyzed=False,
+        has_weapon=False,
+        weapon_analysis_error="no images extracted from zip (9 requested)",
+    )
+    await session.commit()
+
+    found = await repo.get_by_id(request.id)
+    assert found is not None
+    assert found.weapon_analysis_error == "no images extracted from zip (9 requested)"
+    # Error + unanalyzed → the new 4th state ("attempted, failed")
+    assert found.weapon_analyzed is False
+    assert found.has_weapon is False
+    assert found.weapon_summary is None
+
+
+@pytest.mark.asyncio
+async def test_four_weapon_states_are_distinguishable(session):
+    """The new error column enables distinguishing four reachable states:
+    never attempted, attempted-failed, analyzed-clean, weapons-detected."""
+    from src.db.repositories import EmbeddingRequestRepository
+
+    repo = EmbeddingRequestRepository(session)
+    suffix = uuid4()
+
+    # 1. Never attempted (legacy)
+    never = await repo.create_request(
+        evidence_id=f"state-never-{suffix}", camera_id="c", image_urls=[]
+    )
+    # 2. Attempted and failed
+    failed = await repo.create_request(
+        evidence_id=f"state-failed-{suffix}",
+        camera_id="c",
+        image_urls=[],
+        weapon_analysis_error="zip download timeout",
+    )
+    # 3. Analyzed clean
+    clean = await repo.create_request(
+        evidence_id=f"state-clean-{suffix}",
+        camera_id="c",
+        image_urls=[],
+        weapon_analyzed=True,
+        has_weapon=False,
+    )
+    # 4. Weapons detected
+    detected = await repo.create_request(
+        evidence_id=f"state-detected-{suffix}",
+        camera_id="c",
+        image_urls=[],
+        weapon_analyzed=True,
+        has_weapon=True,
+        weapon_classes=["handgun"],
+    )
+    await session.commit()
+
+    assert (never.weapon_analyzed, never.has_weapon, never.weapon_analysis_error) == (
+        False,
+        False,
+        None,
+    )
+    assert (failed.weapon_analyzed, failed.has_weapon, failed.weapon_analysis_error) == (
+        False,
+        False,
+        "zip download timeout",
+    )
+    assert (clean.weapon_analyzed, clean.has_weapon, clean.weapon_analysis_error) == (
+        True,
+        False,
+        None,
+    )
+    assert (detected.weapon_analyzed, detected.has_weapon, detected.weapon_analysis_error) == (
+        True,
+        True,
+        None,
+    )
