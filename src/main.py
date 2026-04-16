@@ -41,6 +41,7 @@ from src.streams.embedding_results_consumer import (
     create_embedding_results_consumer,
     set_results_event_loop,
     set_storage_uploader,
+    set_stream_producer,
     set_vector_repo,
 )
 from src.streams.producer import StreamProducer
@@ -90,13 +91,16 @@ async def lifespan(app: FastAPI):
     set_storage_uploader(storage_uploader)
     logger.info(f"Storage uploader configured: {settings.storage_service_url}")
 
-    # 3. Stream producer (for publishing search requests to GPU)
+    # 3. Stream producer (for publishing search requests to GPU and
+    #    report events to report-generation — see docs/requirements/
+    #    REPORT_GENERATION_STREAMS.md).
     stream_producer = StreamProducer(
         redis_host=settings.redis_host,
         redis_port=settings.redis_port,
         redis_password=settings.redis_password or None,
         redis_db=settings.redis_streams_db,
     )
+    set_stream_producer(stream_producer)
     logger.info("Stream producer ready")
 
     # 4. APScheduler — safety nets + periodic tasks

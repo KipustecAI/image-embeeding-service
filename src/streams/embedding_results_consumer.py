@@ -16,6 +16,10 @@ from uuid import uuid4
 
 import numpy as np
 
+from ..application.helpers.weapon_report_events import (
+    WEAPONS_DETECTED_EVENT_TYPE,
+    build_weapons_detected_event,
+)
 from ..db.models.constants import EmbeddingRequestStatus
 from ..db.models.evidence_embedding import EvidenceEmbeddingRecord
 from ..db.repositories import EmbeddingRequestRepository
@@ -25,6 +29,7 @@ from ..infrastructure.database import get_session
 from ..services.storage_uploader import StorageUploader
 from ..services.zip_processor import ZipProcessor
 from .consumer import StreamConsumer
+from .producer import StreamProducer
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -33,6 +38,7 @@ _event_loop: asyncio.AbstractEventLoop | None = None
 _vector_repo = None  # QdrantVectorRepository, set at startup
 _zip_processor = ZipProcessor()
 _storage_uploader: StorageUploader | None = None
+_stream_producer: StreamProducer | None = None
 
 
 def set_results_event_loop(loop: asyncio.AbstractEventLoop):
@@ -48,6 +54,16 @@ def set_vector_repo(repo):
 def set_storage_uploader(uploader: StorageUploader):
     global _storage_uploader
     _storage_uploader = uploader
+
+
+def set_stream_producer(producer: StreamProducer):
+    """Inject the producer used to publish weapons.detected / image.blacklist_match
+    events to the report-generation service.
+
+    See docs/requirements/REPORT_GENERATION_STREAMS.md for the contract.
+    """
+    global _stream_producer
+    _stream_producer = producer
 
 
 def create_embedding_results_consumer() -> StreamConsumer:
@@ -147,6 +163,10 @@ async def _process_embeddings_result(payload: dict, message_id: str):
         qdrant_embeddings: list[ImageEmbedding] = []
         db_records: list[EvidenceEmbeddingRecord] = []
         all_image_urls: list[str] = []
+        # Per-image data for the weapons.detected report event. Only frames
+        # with at least one detection end up here — clean frames are omitted
+        # per docs/requirements/REPORT_GENERATION_STREAMS.md §2.3.
+        report_images_with_detections: list[dict] = []
 
         for emb in embeddings_data:
             point_id = str(uuid4())
@@ -192,6 +212,16 @@ async def _process_embeddings_result(payload: dict, message_id: str):
                 )
             )
 
+            if per_image_has_weapon:
+                report_images_with_detections.append(
+                    {
+                        "image_name": image_name,
+                        "image_index": emb.get("image_index", 0),
+                        "image_url": image_url,
+                        "detections": per_image_detections,
+                    }
+                )
+
         # 3. Store in Qdrant (single bulk upsert)
         if _vector_repo and qdrant_embeddings:
             await _vector_repo.store_embeddings_batch(qdrant_embeddings)
@@ -235,6 +265,33 @@ async def _process_embeddings_result(payload: dict, message_id: str):
             f"trace_event={trace_event!r}, "
             f"weapon_error={weapon_error_message!r})"
         )
+
+        # Fire-and-forget: publish a weapons.detected event to the
+        # report-generation service. Report generation is non-critical —
+        # a publish failure must never break ingest. See
+        # docs/requirements/REPORT_GENERATION_STREAMS.md §2.7.
+        if weapon_analyzed and report_images_with_detections and _stream_producer is not None:
+            try:
+                event = build_weapons_detected_event(
+                    evidence_id=evidence_id,
+                    camera_id=camera_id,
+                    user_id=user_id,
+                    device_id=device_id,
+                    app_id=app_id,
+                    infraction_code=infraction_code,
+                    weapon_summary=weapon_summary,
+                    images_with_detections=report_images_with_detections,
+                )
+                _stream_producer.publish(
+                    stream=settings.stream_reports_weapons_detected,
+                    event_type=WEAPONS_DETECTED_EVENT_TYPE,
+                    payload=event,
+                )
+            except Exception as pub_err:
+                logger.error(
+                    f"Failed to publish weapons.detected for evidence {evidence_id}: {pub_err}",
+                    exc_info=True,
+                )
 
     except Exception as e:
         logger.error(f"Failed to store embeddings for {evidence_id}: {e}", exc_info=True)
