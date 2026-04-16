@@ -44,6 +44,13 @@ class Settings(BaseSettings):
     stream_evidence_search: str = Field(
         "evidence:search", validation_alias="STREAM_EVIDENCE_SEARCH"
     )
+    # Publishing to report-generation (see docs/requirements/REPORT_GENERATION_STREAMS.md)
+    stream_reports_weapons_detected: str = Field(
+        "weapons:detected", validation_alias="STREAM_REPORTS_WEAPONS_DETECTED"
+    )
+    stream_reports_image_blacklist_match: str = Field(
+        "image:blacklist_match", validation_alias="STREAM_REPORTS_IMAGE_BLACKLIST_MATCH"
+    )
     # Consuming from GPU (output streams)
     stream_embeddings_results: str = Field(
         "embeddings:results", validation_alias="STREAM_EMBEDDINGS_RESULTS"
