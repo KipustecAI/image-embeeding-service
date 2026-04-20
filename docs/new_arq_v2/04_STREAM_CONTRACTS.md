@@ -91,6 +91,12 @@ Notes:
 - `image_index`: position after filtering, not in the original ZIP listing
 - All ETL metadata (`user_id`, `device_id`, `app_id`, `infraction_code`, `zip_url`) is required — the backend relies on it for storage upload path, Qdrant payload, and DB row creation
 
+### Optional field: `category` *(added 2026-04-18)*
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `category` | string \| null | **no** | Human-assigned evidence category — `"vehicle"`, `"scene"`, `"person"`, `"infraction_pattern"`, or any free-form label the producer chooses. No enum. Null/absent means "uncategorized". Backend stores on `embedding_requests.category` and injects into each Qdrant point payload for search-time filtering. Legacy producers that don't send this field continue to work unchanged. See [../image-blacklist/01_CATEGORY.md](../image-blacklist/01_CATEGORY.md). |
+
 ### Optional: `weapon_analysis` enrichment
 
 If the message was routed through the `compute-weapons` service, the payload includes an optional `weapon_analysis` block alongside the fields above:

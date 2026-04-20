@@ -279,6 +279,7 @@ These are frozen behaviors the backend guarantees. If a rule becomes inconvenien
 | Unknown top-level fields in `weapon_analysis` | Silently ignored | Forward compat |
 | Unknown fields in `detections[N]` | Preserved verbatim in `weapon_detections` JSONB | Forward compat |
 | **Unknown root-level fields** (e.g. `trace_event`) | Silently ignored | The consumer uses explicit `payload.get(...)` per known field; anything else is dropped without error. Producers can add observability fields at the root freely. |
+| `category` at root *(added 2026-04-18)* | **Captured** into `embedding_requests.category` and propagated to each Qdrant point's payload | Evidence-level human-assigned category. Optional, nullable. See [../image-blacklist/01_CATEGORY.md](../image-blacklist/01_CATEGORY.md) and [../new_arq_v2/04_STREAM_CONTRACTS.md](../new_arq_v2/04_STREAM_CONTRACTS.md). |
 | `weapon_analysis_error: {"message": "..."}` at root | **Captured** into `embedding_requests.weapon_analysis_error` column | Producer's failure pass-through path. See §5.1 below. |
 | `trace_event: "weapons.analyzed"` / `"weapons.failed"` at root | Logged, not persisted | Producer trace label for observability. Redundant with other fields (presence of `weapon_analysis` or `weapon_analysis_error`). |
 

@@ -41,6 +41,8 @@ _EVIDENCE_PAYLOAD_INDICES: list[tuple[str, str]] = [
     ("weapon_analyzed", "bool"),
     ("has_weapon", "bool"),
     ("weapon_classes", "keyword"),
+    # Category — see docs/image-blacklist/01_CATEGORY.md
+    ("category", "keyword"),
 ]
 
 

@@ -120,6 +120,46 @@ curl -X POST http://localhost:8001/api/v1/search \
   }'
 ```
 
+### Search narrowed by category
+
+Category is a free-form string assigned by the ETL producer (e.g. `"vehicle"`, `"scene"`). Pass a scalar for exact match or a list for `MatchAny` across multiple categories. See [../image-blacklist/01_CATEGORY.md](../image-blacklist/01_CATEGORY.md).
+
+```bash
+# Single category — only vehicle evidence
+curl -X POST http://localhost:8001/api/v1/search \
+  -H "X-User-Id: 550e8400-e29b-41d4-a716-446655440000" \
+  -H "X-User-Role: user" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "image_url": "https://storage.example.com/query.jpg",
+    "threshold": 0.75,
+    "category": "vehicle"
+  }'
+
+# Multiple categories — matches from any of the listed categories
+curl -X POST http://localhost:8001/api/v1/search \
+  -H "X-User-Id: 550e8400-e29b-41d4-a716-446655440000" \
+  -H "X-User-Role: user" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "image_url": "https://storage.example.com/query.jpg",
+    "threshold": 0.75,
+    "category": ["vehicle", "scene"]
+  }'
+
+# Category combined with weapons filter — weapon-bearing vehicles only
+curl -X POST http://localhost:8001/api/v1/search \
+  -H "X-User-Id: 550e8400-e29b-41d4-a716-446655440000" \
+  -H "X-User-Role: user" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "image_url": "https://storage.example.com/query.jpg",
+    "threshold": 0.75,
+    "weapons_filter": "only",
+    "category": "vehicle"
+  }'
+```
+
 ### Search with local file (development)
 
 ```bash

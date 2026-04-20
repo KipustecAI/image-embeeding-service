@@ -272,6 +272,9 @@ class SearchCreateRequest(BaseModel):
     # Weapons filter — see docs/weapons/04_SEARCH_API.md
     weapons_filter: Literal["all", "only", "exclude", "analyzed_clean"] = "all"
     weapon_classes: list[str] | None = None
+    # Category filter — see docs/image-blacklist/01_CATEGORY.md
+    # Scalar → Qdrant MatchValue; list → MatchAny (any of the requested categories match).
+    category: str | list[str] | None = None
 
 
 @app.post("/api/v1/search", status_code=202)
@@ -299,6 +302,12 @@ async def create_search(
             )
         else:
             metadata["weapon_classes"] = list(body.weapon_classes)
+
+    # Category filter — scalar or list. See docs/image-blacklist/01_CATEGORY.md.
+    if body.category:
+        metadata["category"] = (
+            list(body.category) if isinstance(body.category, list) else body.category
+        )
 
     # Create DB row (status=TO_WORK)
     async with get_session() as session:
@@ -460,7 +469,9 @@ async def trigger_recalculation(
             filter_conditions: dict = {}
             if s.search_metadata:
                 filter_conditions = {
-                    k: v for k, v in s.search_metadata.items() if k in ("camera_id", "object_type")
+                    k: v
+                    for k, v in s.search_metadata.items()
+                    if k in ("camera_id", "object_type", "category")
                 }
                 filter_conditions.update(build_weapon_filter_conditions(s.search_metadata))
             if not filter_conditions:

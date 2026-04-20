@@ -111,6 +111,7 @@ async def _process_embeddings_result(payload: dict, message_id: str):
     device_id = payload.get("device_id")
     app_id = payload.get("app_id")
     infraction_code = payload.get("infraction_code")
+    category = payload.get("category")  # Optional, see docs/image-blacklist/01_CATEGORY.md
     embeddings_data = payload.get("embeddings", [])
 
     # Optional weapons enrichment — see docs/weapons/03_CONSUMER.md
@@ -194,6 +195,7 @@ async def _process_embeddings_result(payload: dict, message_id: str):
                     "user_id": user_id,
                     "device_id": device_id,
                     "app_id": app_id,
+                    "category": category,
                     "weapon_analyzed": weapon_analyzed,
                     "has_weapon": per_image_has_weapon,
                     "weapon_classes": per_image_classes,
@@ -244,6 +246,7 @@ async def _process_embeddings_result(payload: dict, message_id: str):
                 weapon_max_confidence=weapon_summary.get("max_confidence"),
                 weapon_summary=weapon_summary or None,
                 weapon_analysis_error=weapon_error_message,
+                category=category,
             )
 
             # Link DB records to the request

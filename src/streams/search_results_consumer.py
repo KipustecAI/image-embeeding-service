@@ -95,6 +95,9 @@ async def _process_search_result(payload: dict, message_id: str):
                 filter_conditions["camera_id"] = search_metadata["camera_id"]
             if "object_type" in search_metadata:
                 filter_conditions["object_type"] = search_metadata["object_type"]
+            if "category" in search_metadata:
+                # Scalar or list — list triggers MatchAny in qdrant_repository.search_similar.
+                filter_conditions["category"] = search_metadata["category"]
             # Weapons — translated from weapons_filter mode via shared helper
             filter_conditions.update(build_weapon_filter_conditions(search_metadata))
         if not filter_conditions:

@@ -144,6 +144,7 @@ Creates a search request and publishes it to the GPU compute stream. The GPU com
 | max_results | int | no | 50 | Maximum number of results |
 | weapons_filter | string | no | `"all"` | `all` \| `only` \| `exclude` \| `analyzed_clean` — see below |
 | weapon_classes | list[str] | no | null | Class subset (e.g. `["handgun"]`). Only meaningful with `weapons_filter="only"`; ignored otherwise. |
+| category | string \| list[str] | no | null | Narrow results by evidence category (e.g. `"vehicle"` or `["vehicle", "scene"]`). Scalar matches exact; list uses MatchAny (any of the requested categories match). Free-form string — no enum. See [../image-blacklist/01_CATEGORY.md](../image-blacklist/01_CATEGORY.md). |
 | metadata | object | no | null | Filter conditions (camera_id, object_type) |
 
 `user_id` is automatically taken from the `X-User-Id` gateway header.
@@ -339,7 +340,7 @@ Uses stored query vectors — no GPU, no image re-download. ~100ms per search.
 
 | Collection | Purpose |
 |------------|---------|
-| `evidence_embeddings` | Evidence image vectors (512-dim CLIP ViT-B-32, cosine distance). Payload indices on `evidence_id`, `camera_id`, `source_type`, `user_id`, `device_id`, `app_id` (multi-tenant filtering), plus `weapon_analyzed`, `has_weapon`, `weapon_classes` (weapons filtering — see [../weapons/](../weapons/)) |
+| `evidence_embeddings` | Evidence image vectors (512-dim CLIP ViT-B-32, cosine distance). Payload indices on `evidence_id`, `camera_id`, `source_type`, `user_id`, `device_id`, `app_id` (multi-tenant filtering), `weapon_analyzed`, `has_weapon`, `weapon_classes` (weapons filtering — see [../weapons/](../weapons/)), plus `category` (category filtering — see [../image-blacklist/01_CATEGORY.md](../image-blacklist/01_CATEGORY.md)) |
 | `search_queries` | Stored query vectors for recalculation. One point per search, payload: `search_id` only |
 
 ## Database Tables
