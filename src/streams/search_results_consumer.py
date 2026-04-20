@@ -10,6 +10,7 @@ from datetime import datetime
 
 import numpy as np
 
+from ..application.helpers.source_type_filter import build_evidence_only_filter
 from ..application.helpers.weapon_filters import build_weapon_filter_conditions
 from ..db.models.constants import SearchRequestStatus, SimilarityStatus
 from ..db.models.search_match import SearchMatch
@@ -100,8 +101,10 @@ async def _process_search_result(payload: dict, message_id: str):
                 filter_conditions["category"] = search_metadata["category"]
             # Weapons — translated from weapons_filter mode via shared helper
             filter_conditions.update(build_weapon_filter_conditions(search_metadata))
-        if not filter_conditions:
-            filter_conditions = None
+
+        # User-facing search — never return blacklist points.
+        # See docs/image-blacklist/03_QDRANT.md.
+        filter_conditions = build_evidence_only_filter(filter_conditions)
 
         # Search Qdrant
         matches = []

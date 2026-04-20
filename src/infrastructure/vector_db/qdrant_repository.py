@@ -43,6 +43,10 @@ _EVIDENCE_PAYLOAD_INDICES: list[tuple[str, str]] = [
     ("weapon_classes", "keyword"),
     # Category — see docs/image-blacklist/01_CATEGORY.md
     ("category", "keyword"),
+    # Image blacklist — see docs/image-blacklist/03_QDRANT.md.
+    # source_type already indexed above; blacklist points add blacklist_entry_id
+    # so we can retrieve a specific entry's points for deletion / re-matching.
+    ("blacklist_entry_id", "keyword"),
 ]
 
 

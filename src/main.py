@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from src.api.dependencies import UserContext, get_user_context
+from src.application.helpers.source_type_filter import build_evidence_only_filter
 from src.application.helpers.weapon_filters import build_weapon_filter_conditions
 from src.db.repositories import EmbeddingRequestRepository, SearchRequestRepository
 from src.infrastructure.config import get_settings
@@ -474,8 +475,10 @@ async def trigger_recalculation(
                     if k in ("camera_id", "object_type", "category")
                 }
                 filter_conditions.update(build_weapon_filter_conditions(s.search_metadata))
-            if not filter_conditions:
-                filter_conditions = None
+
+            # User-facing search — never return blacklist points.
+            # See docs/image-blacklist/03_QDRANT.md.
+            filter_conditions = build_evidence_only_filter(filter_conditions)
 
             matches = await vector_repo.search_similar(
                 query_vector=np.array(query_vector_list, dtype=np.float32),
