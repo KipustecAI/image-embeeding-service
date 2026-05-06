@@ -17,10 +17,9 @@ v1 design tradeoffs:
   follow-up if the post-threshold result count ever exceeds the batch
   size — but that would also be a strong signal that the threshold is
   wrong, not just that we need more pages.
-- **Match publishing is a Phase 05 hook.** This module logs the match
-  count and walks the result list; the actual ``image:blacklist_match``
-  event payload is built by Phase 05's ``BlacklistMatchService`` to keep
-  the publishing contract in one place.
+- **Match publishing.** Each match goes out as one ``image:blacklist_match``
+  event via the shared ``BlacklistMatchService`` (same publisher as the
+  inline match path).
 """
 
 from __future__ import annotations
@@ -32,7 +31,9 @@ from uuid import UUID
 import numpy as np
 
 from ..application.helpers.source_type_filter import build_evidence_only_filter
+from ..db.repositories.blacklist_image_repo import BlacklistImageRepository
 from ..infrastructure.config import get_settings
+from ..infrastructure.database import get_session
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -146,10 +147,55 @@ async def _run_reverse_search(
         threshold,
     )
 
-    # Phase 05: emit one image:blacklist_match per match via
-    # BlacklistMatchService. For now we walk the list so that the
-    # logging line above reflects what would have been published.
-    # Wiring the publisher here when Phase 05 lands is a one-import
-    # change.
-    for _ in matches:
-        pass
+    if not matches:
+        return
+
+    # Load the entry + reference once. Wrapped in try/except because
+    # APScheduler swallows job exceptions silently — without this guard
+    # a transient DB blip would lose the entire match batch with no log
+    # trail. Same defensive pattern as the search call above.
+    try:
+        async with get_session() as session:
+            repo = BlacklistImageRepository(session)
+            entry = await repo.get_entry(entry_id)
+            reference = await repo.get_reference(reference_id)
+    except Exception as e:
+        logger.error(
+            "Reverse search DB load failed: entry=%s ref=%s err=%s",
+            entry_id,
+            reference_id,
+            e,
+            exc_info=True,
+        )
+        return
+
+    if entry is None or reference is None:
+        logger.error(
+            "Reverse search produced %d matches but entry=%s or ref=%s "
+            "was deleted before publish; dropping",
+            len(matches),
+            entry_id,
+            reference_id,
+        )
+        return
+
+    # Imported lazily to avoid a circular at module-load time (the match
+    # service imports from helpers/, which is light, but this defers
+    # the publisher_set side-effect check too).
+    from .blacklist_match_service import publish_blacklist_match
+
+    for match in matches:
+        md = match.metadata or {}
+        await publish_blacklist_match(
+            user_id=user_id,
+            entry=entry,
+            reference=reference,
+            evidence_id=str(match.evidence_id),
+            evidence_metadata=md,
+            matched_image_url=match.image_url,
+            matched_image_index=md.get("image_index", 0),
+            matched_qdrant_point_id=str(md.get("qdrant_point_id", "")),
+            similarity_score=match.similarity_score,
+            threshold_used=threshold,
+            trigger="reverse_search",
+        )

@@ -250,11 +250,21 @@ class QdrantVectorRepository(VectorRepository):
                 else:
                     created_at = datetime.utcnow()
 
+                # Inject the Qdrant point id into the metadata dict. The
+                # blacklist-match flow needs to know which specific point
+                # matched (it goes onto the report event); the user-facing
+                # search flow reads matched_qdrant_point_id from here too
+                # when we build the SearchMatch row. Keys starting with the
+                # field name (no leading underscore) so it surfaces cleanly
+                # in JSON when the caller serializes metadata.
+                enriched_payload = dict(payload)
+                enriched_payload["qdrant_point_id"] = str(result.id)
+
                 search_result = SearchResult(
                     evidence_id=payload.get("evidence_id", result.id),
                     image_url=payload.get("image_url", ""),
                     similarity_score=result.score,
-                    metadata=payload,
+                    metadata=enriched_payload,
                     camera_id=camera_id,
                     created_at=created_at,
                 )

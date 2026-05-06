@@ -32,6 +32,7 @@ from src.infrastructure.database import engine, get_session
 from src.infrastructure.entity_taxonomy import resolve_entity_label
 from src.infrastructure.vector_db.qdrant_repository import QdrantVectorRepository
 from src.services.blacklist_embed_service import set_blacklist_vector_repo
+from src.services.blacklist_match_service import set_blacklist_match_stream_producer
 from src.services.blacklist_reverse_search import (
     set_reverse_search_scheduler,
     set_reverse_search_vector_repo,
@@ -113,6 +114,10 @@ async def lifespan(app: FastAPI):
         redis_db=settings.redis_streams_db,
     )
     set_stream_producer(stream_producer)
+    # Same producer routes the image.blacklist_match events (Phase 05)
+    # to the report-generation stream — see
+    # docs/requirements/REPORT_GENERATION_STREAMS.md §3.
+    set_blacklist_match_stream_producer(stream_producer)
     logger.info("Stream producer ready")
 
     # 4. APScheduler — safety nets + periodic tasks

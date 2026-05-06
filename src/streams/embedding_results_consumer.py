@@ -17,6 +17,7 @@ from uuid import uuid4
 import numpy as np
 
 from ..application.helpers.category_serializer import entities_to_category
+from ..application.helpers.source_type_filter import build_blacklist_only_filter
 from ..application.helpers.weapon_report_events import (
     WEAPONS_DETECTED_EVENT_TYPE,
     build_weapons_detected_event,
@@ -24,6 +25,7 @@ from ..application.helpers.weapon_report_events import (
 from ..db.models.constants import EmbeddingRequestStatus
 from ..db.models.evidence_embedding import EvidenceEmbeddingRecord
 from ..db.repositories import EmbeddingRequestRepository
+from ..db.repositories.blacklist_image_repo import BlacklistImageRepository
 from ..domain.entities import ImageEmbedding
 from ..infrastructure.config import get_settings
 from ..infrastructure.database import get_session
@@ -201,6 +203,10 @@ async def _process_embeddings_result(payload: dict, message_id: str):
                     "user_id": user_id,
                     "device_id": device_id,
                     "app_id": app_id,
+                    # Stored in the Qdrant payload so blacklist match events
+                    # can attribute matches to a specific infraction without a
+                    # DB roundtrip — see docs/image-blacklist/05_MATCH_AND_REPORT.md.
+                    "infraction_code": infraction_code,
                     "category": category_qdrant,
                     "weapon_analyzed": weapon_analyzed,
                     "has_weapon": per_image_has_weapon,
@@ -302,6 +308,25 @@ async def _process_embeddings_result(payload: dict, message_id: str):
                     exc_info=True,
                 )
 
+        # Inline blacklist match — search this user's blacklist subset for
+        # matches against each newly-stored evidence vector. Same fire-and-
+        # forget policy as weapons: a match-publish failure must NOT break
+        # ingest. See docs/image-blacklist/05_MATCH_AND_REPORT.md.
+        if user_id and _vector_repo and qdrant_embeddings:
+            try:
+                await _inline_blacklist_match(
+                    user_id=user_id,
+                    evidence_id=evidence_id,
+                    embeddings=qdrant_embeddings,
+                )
+            except Exception as match_err:
+                logger.error(
+                    "Inline blacklist match failed for evidence %s: %s",
+                    evidence_id,
+                    match_err,
+                    exc_info=True,
+                )
+
     except Exception as e:
         logger.error(f"Failed to store embeddings for {evidence_id}: {e}", exc_info=True)
         # Create error row for tracking
@@ -320,6 +345,116 @@ async def _process_embeddings_result(payload: dict, message_id: str):
                 )
                 request.status = EmbeddingRequestStatus.ERROR
                 request.error_message = str(e)[:500]
+
+
+async def _inline_blacklist_match(
+    *,
+    user_id: str,
+    evidence_id: str,
+    embeddings: list[ImageEmbedding],
+) -> None:
+    """Search this user's blacklist subset for matches against each new
+    evidence vector. One Qdrant query per evidence frame.
+
+    Hot-path optimization: skip everything when the user has no active
+    blacklist entries. ``count_active_by_user`` is an indexed integer
+    aggregate (~1ms) and saves the per-frame Qdrant round-trips
+    (~10ms each, ~9 frames typical) for the majority of tenants who
+    haven't adopted blacklist.
+
+    The match-publish path is shared with the reverse-search job — see
+    ``src/services/blacklist_match_service.py``.
+    """
+    from uuid import UUID
+
+    from ..services.blacklist_match_service import publish_blacklist_match
+
+    async with get_session() as session:
+        repo = BlacklistImageRepository(session)
+        if await repo.count_active_by_user(user_id) == 0:
+            return
+
+    threshold = settings.blacklist_match_threshold
+    base_filter = build_blacklist_only_filter({"user_id": user_id})
+
+    # Per-evidence cache so we don't re-fetch the same entry/reference for
+    # each frame that hits the same blacklist points.
+    entry_cache: dict[UUID, object] = {}
+    reference_cache: dict[UUID, object] = {}
+
+    for embedding in embeddings:
+        try:
+            matches = await _vector_repo.search_similar(
+                query_vector=embedding.vector,
+                limit=settings.max_search_results,
+                threshold=threshold,
+                filter_conditions=base_filter,
+            )
+        except Exception as search_err:
+            logger.error(
+                "Inline blacklist search failed for evidence=%s frame=%s: %s",
+                evidence_id,
+                embedding.id,
+                search_err,
+                exc_info=True,
+            )
+            continue
+
+        if not matches:
+            continue
+
+        # Each match is a blacklist Qdrant point — its payload tells us
+        # which entry + reference to attribute the match to.
+        for match in matches:
+            md = match.metadata or {}
+            entry_id_raw = md.get("blacklist_entry_id")
+            reference_id_raw = md.get("blacklist_reference_id")
+            if not entry_id_raw or not reference_id_raw:
+                logger.warning(
+                    "Blacklist match missing entry/reference id in payload (evidence=%s); skipping",
+                    evidence_id,
+                )
+                continue
+
+            try:
+                entry_uuid = UUID(entry_id_raw)
+                reference_uuid = UUID(reference_id_raw)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Blacklist match has malformed UUIDs (evidence=%s); skipping",
+                    evidence_id,
+                )
+                continue
+
+            async with get_session() as session:
+                repo = BlacklistImageRepository(session)
+                entry = entry_cache.get(entry_uuid)
+                if entry is None:
+                    entry = await repo.get_entry(entry_uuid)
+                    entry_cache[entry_uuid] = entry
+                reference = reference_cache.get(reference_uuid)
+                if reference is None:
+                    reference = await repo.get_reference(reference_uuid)
+                    reference_cache[reference_uuid] = reference
+
+            if entry is None or reference is None:
+                # Race: entry/reference deleted between embed and match.
+                # Drop the match — there's no recipient anyway.
+                continue
+
+            await publish_blacklist_match(
+                user_id=user_id,
+                entry=entry,
+                reference=reference,
+                evidence_id=evidence_id,
+                evidence_metadata=embedding.metadata or {},
+                matched_image_url=embedding.image_url,
+                matched_image_index=(embedding.metadata or {}).get("image_index", 0),
+                matched_qdrant_point_id=embedding.id,
+                similarity_score=match.similarity_score,
+                threshold_used=threshold,
+                trigger="inline",
+            )
 
 
 async def _process_compute_error(payload: dict):

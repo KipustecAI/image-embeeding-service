@@ -290,44 +290,146 @@ If this trade becomes unacceptable later — e.g. you want delivery guarantees t
 
 ---
 
-## 3. Sub-type 1E — `image:blacklist_match` *(future, design note only)*
+## 3. Sub-type 1E — `image:blacklist_match`
 
-**Status:** not in scope for the current ship. Do **not** implement a consumer for this yet. The payload shape will be finalized when the blacklist feature is actually designed on our side.
+**Status:** **contract finalized** — backend Phase 05 of the image-blacklist feature ships the publisher. Build a consumer to this shape.
 
-**What it will be:** when a user runs a similarity search (`POST /api/v1/search`) and the matches include an image that lives in a configured "blacklist" set (e.g. known-bad evidences flagged for alerting), we'll publish an `image:blacklist_match` event so your service can generate a match-alert report.
+**What it is:** users register CLIP-embedded "blacklist" reference images on their tenant (license plates, vehicles, scenes that should trigger alerts). Whenever a piece of evidence matches one of those references in vector space, we publish an `image:blacklist_match` event. Two trigger paths produce identical payloads with a different `trigger` field:
 
-**Naming rationale:** parallels your existing `face:blacklist_match` and `plate:blacklist_match` sub-types. It's the image-similarity analog.
+1. **`trigger: "inline"`** — a newly-ingested evidence matched an existing blacklist entry (live alerting on new ingest).
+2. **`trigger: "reverse_search"`** — a newly-added blacklist entry matched historical evidence (catch-up scan when a user adds a new blacklist).
 
-**Open questions on our side (not yours to answer):**
-- How is the blacklist stored? Separate Qdrant collection? A boolean `is_blacklisted` on existing points? A separate DB table of `evidence_id`s? — TBD
-- Who populates the blacklist? Manual admin action? Automated from another source? — TBD
-- Is it app-scoped, user-scoped, or global? — TBD
-- Does publishing happen at search completion, or only when a new evidence matches an existing blacklist? — TBD
+**Naming rationale:** parallels your existing `face:blacklist_match` and `plate:blacklist_match` sub-types. Image-similarity analog over CLIP embeddings.
 
-**Rough payload shape** (subject to change — do **not** build to this yet):
+### 3.1 Stream
+
+| Setting | Value |
+|---|---|
+| Stream name | `image:blacklist_match` |
+| Envelope event_type | `image.blacklist_match` |
+| Producer | image-embeeding-service backend |
+| Consumer group | (yours — your call on naming) |
+
+Configurable on our side via `STREAM_REPORTS_IMAGE_BLACKLIST_MATCH` (already wired since the weapons phase). Default matches the value above.
+
+### 3.2 Envelope
+
+Same envelope conventions as 1D. The XADD message has two fields:
+
+| Field | Value |
+|---|---|
+| `event_type` | `"image.blacklist_match"` |
+| `payload` | JSON-encoded `ImageBlacklistMatchEvent` (see §3.3) |
+
+### 3.3 Payload — `ImageBlacklistMatchEvent`
 
 ```typescript
+// To be added to report-generation/src/type1/dto/image-blacklist-match.event.ts
 export interface ImageBlacklistMatchEvent {
-  search_id: string;             // Our search request ID
-  user_id: string;               // Tenant running the search
-  app_id: number;
+  // ── Identity / multi-tenant ──
+  user_id: string;              // Tenant owner of both blacklist entry and evidence
 
-  // The blacklist entry that matched
-  matched_evidence_id: string;
-  matched_image_url: string;
-  matched_blacklist_reason?: string;
+  // ── The blacklist side ──
+  blacklist_entry_id: string;
+  blacklist_entry_name: string;
+  blacklist_entry_category: string | null;  // Optional category tag on the entry
+  blacklist_entry_version: number;          // Bumped when entry / references change.
+                                            // Receiver dedups on (evidence_id, entry_id, version).
+  blacklist_reference_id: string;           // Specific reference image that matched
+  blacklist_reference_url: string;          // URL of the reference image (for the report)
+  blacklist_model_version: string;          // e.g. "clip-vit-b-32"
 
-  // The query that triggered it
-  query_image_url: string;
-  similarity_score: number;
+  // ── The evidence side ──
+  evidence_id: string;
+  evidence_camera_id: string | null;
+  evidence_device_id: string | null;
+  evidence_app_id: number | null;
+  evidence_infraction_code: string | null;
+  evidence_category: string | null;
+  matched_image_url: string;                // The specific evidence frame URL
+  matched_image_index: number;              // Frame index within the evidence
+  matched_qdrant_point_id: string;          // Qdrant point id of the evidence frame
 
-  // Matching frame detail
-  // (probably similar structure to WeaponsDetectedEvent.images[0])
-  matched_at: string;
+  // ── Match detail ──
+  similarity_score: number;                 // 0..1 cosine similarity at match time
+  threshold_used: number;                   // The threshold the match cleared
+  trigger: "inline" | "reverse_search";
+
+  // ── Timing ──
+  matched_at: string;                       // ISO-8601 UTC, trailing Z
 }
 ```
 
-Take this as a "here's the rough direction" signal, not a contract. When we're ready to ship 1E, we'll add a `REPORT_IMAGE_BLACKLIST.md` sibling doc with the real shape.
+#### Field-by-field notes
+
+| Field | Notes |
+|---|---|
+| `user_id` | Always present and non-empty. Both the blacklist entry and the evidence belong to this tenant — no cross-tenant matches. |
+| `blacklist_entry_*` | Self-contained — no DB lookup needed on the receiver side to render the report. |
+| `blacklist_entry_version` | Integer. **Receivers dedup on `(evidence_id, blacklist_entry_id, blacklist_entry_version)`.** A version bump means the entry's defining set of references changed — same evidence matching the new version is genuinely new info, treat as a fresh report (or apply your own policy). |
+| `blacklist_reference_id` | Each blacklist entry can have multiple reference images attached. This identifies which specific reference matched. The reference URL helps the receiver render "matched against this image" attribution. |
+| `evidence_*` | Mirror the existing `WeaponsDetectedEvent` evidence fields. `infraction_code` is now stored in the Qdrant payload directly (see backend's Phase 05 commit), so reverse-search matches can populate it without a DB lookup. |
+| `matched_qdrant_point_id` | The Qdrant point id of the matched evidence frame. Useful for cross-referencing if you ever need to query Qdrant directly. |
+| `similarity_score` | Raw cosine similarity from Qdrant. Threshold is also included so the receiver can display "92% confidence (threshold 85%)" in the alert. |
+| `trigger` | `"inline"` for matches detected on new evidence ingest; `"reverse_search"` for matches detected when a new blacklist reference is registered against historical evidence. The shape is identical — receiver may want to phrase the user-facing alert differently ("new evidence matched your blacklist" vs "your new blacklist matched historical evidence"). |
+
+### 3.4 Example payload — inline match
+
+```json
+{
+  "user_id": "3996d660-99c2-4c9e-bda6-4a5c2be7906e",
+
+  "blacklist_entry_id": "a1b2c3d4-1111-2222-3333-444444444444",
+  "blacklist_entry_name": "Placa del sospechoso - caso 2025-042",
+  "blacklist_entry_category": "vehicle",
+  "blacklist_entry_version": 1,
+  "blacklist_reference_id": "e5f6a7b8-1111-2222-3333-444444444444",
+  "blacklist_reference_url": "https://minio.lookia.mx/blacklist/user-3996/.../ref_1.jpg",
+  "blacklist_model_version": "clip-vit-b-32",
+
+  "evidence_id": "dd946e14-17b2-4d6d-a94a-94793fce2347",
+  "evidence_camera_id": "0d3f9a4b-3381-4e9e-b8a7-6db8ad0fc5e3",
+  "evidence_device_id": "1d7d50b3-b97e-4725-b044-e2de4624d2e5",
+  "evidence_app_id": 1,
+  "evidence_infraction_code": "SMVV8UGE_116_875_20260410100151",
+  "evidence_category": "[2]",
+  "matched_image_url": "https://minio.lookia.mx/lucam-assets/embeddings/.../frame_3.jpg",
+  "matched_image_index": 3,
+  "matched_qdrant_point_id": "326b5f83-6d88-4c34-b82d-c46ccaa104b1",
+
+  "similarity_score": 0.893,
+  "threshold_used": 0.85,
+  "trigger": "inline",
+
+  "matched_at": "2026-04-18T14:22:03.501Z"
+}
+```
+
+### 3.5 Example payload — reverse-search match
+
+Identical shape with `trigger: "reverse_search"`. The `evidence_*` fields reference an evidence that was ingested before the blacklist entry existed — typically older `matched_at` timestamp on the underlying evidence, but the event's own `matched_at` is the moment the reverse-search job ran.
+
+### 3.6 Trigger semantics — when we publish
+
+We publish **one event per `(evidence_frame, blacklist_reference)` match pair** where the cosine similarity meets `threshold_used`. Implications:
+
+- A single new evidence with N frames against M blacklist entries can produce up to N×M events (in practice far fewer — most frames don't match anything).
+- A reverse search for a new blacklist reference against E historical evidence (with N frames each) can produce up to E events.
+- The same `(evidence, entry)` pair can fire twice across reasonable time windows: once on inline at ingest, again later if the entry gets re-indexed (version bump) and a backfill is triggered. The `blacklist_entry_version` field is your dedup key.
+
+### 3.7 Dedup responsibility
+
+Producer side (us): we publish every match. We do **not** dedup on `(evidence_id, entry_id)` — same as the weapons stream's policy.
+
+Receiver side (you): dedup on `(evidence_id, blacklist_entry_id, blacklist_entry_version)`. If you've already generated a report for that triple, suppress. When `blacklist_entry_version` changes, the match is genuinely new info (the entry's reference set changed) and a fresh report makes sense.
+
+### 3.8 Delivery guarantees — fire-and-forget from our side
+
+Same policy as 1D: a publish failure on our side logs and does **not** roll back ingest or the reverse-search job. We treat report generation as best-effort. If you observe a gap, it's recoverable via `POST /api/v1/blacklist/image-entries/{id}/backfill` (Phase 06) which re-runs the reverse search end-to-end.
+
+### 3.9 Event ordering
+
+No cross-evidence ordering guarantees. Within a single inline match (one evidence ingest), the events for that evidence fire in frame order, but a separate evidence ingesting in parallel can interleave arbitrarily. Reverse-search events from different blacklist entries can interleave. Use `(blacklist_entry_id, evidence_id, blacklist_entry_version)` as your stable identity rather than position in the stream.
 
 ---
 
