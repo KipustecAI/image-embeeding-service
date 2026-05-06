@@ -28,7 +28,7 @@ Notes:
 
 ## Stream: evidence:search (Backend → Compute)
 
-Published by the backend when a user submits a search via `POST /api/v1/search`.
+Published by the backend when a user submits a search via `POST /api/v1/search`, **or** when a user attaches a reference image to a blacklist entry (`POST /api/v1/blacklist/image-entries/{id}/references`). Both paths share the same stream — the optional `purpose` field tells the backend's `search:results` consumer how to dispatch the returned vector.
 
 ```json
 {
@@ -41,10 +41,23 @@ Published by the backend when a user submits a search via `POST /api/v1/search`.
     "max_results": 50,
     "metadata": {
       "camera_id": "660e8400-e29b-41d4-a716-446655440000"
-    }
+    },
+    "purpose": "search",
+    "blacklist_entry_id": null
   }
 }
 ```
+
+### Optional fields *(added 2026-05-05)*
+
+| Field | Type | Required | Default | Notes |
+|---|---|---|---|---|
+| `purpose` | `"search"` \| `"blacklist_embed"` | no | `"search"` | Discriminator for the backend's `search:results` consumer. Compute treats both values identically — embed the image and publish the vector. The dispatch happens in the backend. Legacy callers that omit the field get `"search"` semantics. |
+| `blacklist_entry_id` | string (UUID) \| null | no | null | Present only when `purpose="blacklist_embed"`. Opaque echo value — compute echoes it on `search:results` so the backend can attribute the returned vector to a blacklist entry. |
+
+**Blacklist embed request.** When `purpose="blacklist_embed"`, the payload represents a reference image that should be embedded and returned via `search:results` for backend-side storage as a blacklist point. `search_id` in that case carries the `BlacklistImageReference.id` as an opaque echo value (the GPU does not interpret it). `threshold` and `max_results` are unused by the backend on this path but tolerated for shape uniformity.
+
+See [../image-blacklist/04_EMBEDDING_FLOW.md](../image-blacklist/04_EMBEDDING_FLOW.md) for the dispatch logic and [../requirements/IMAGE_COMPUTE_STREAMS.md](../requirements/IMAGE_COMPUTE_STREAMS.md) §3 for the negotiation trail.
 
 ## Stream: embeddings:results (Compute → Backend)
 
@@ -167,12 +180,14 @@ Published by the compute service after embedding the query image.
     "max_results": 50,
     "metadata": {
       "camera_id": "660e8400-e29b-41d4-a716-446655440000"
-    }
+    },
+    "purpose": "search",
+    "blacklist_entry_id": null
   }
 }
 ```
 
-The backend receives the pre-computed query vector and executes the Qdrant search itself.
+The backend receives the pre-computed query vector and executes the Qdrant search itself, OR — when `purpose="blacklist_embed"` — stores the vector as a blacklist point and schedules a reverse-search job. Compute echoes both `purpose` and `blacklist_entry_id` byte-identical from the input request; legacy callers that didn't send `purpose` get the default `"search"` value here.
 
 ### Error
 
@@ -187,6 +202,35 @@ The backend receives the pre-computed query vector and executes the Qdrant searc
 }
 ```
 
+**Note:** `compute.error` envelopes deliberately do **not** carry `purpose` or `blacklist_entry_id` — the failure shape is identical regardless of intent. The backend dispatches errors by looking `entity_id` up in `blacklist_image_references` first and falling through to `search_requests`. See [../image-blacklist/04_EMBEDDING_FLOW.md](../image-blacklist/04_EMBEDDING_FLOW.md) §"Error routing".
+
+## Stream: image:blacklist_match (Backend → report-generation) *(added 2026-05-05)*
+
+Published by the backend whenever an evidence frame matches a blacklist reference image — either inline at ingest time or via a reverse search after a new blacklist entry is registered. Consumed by the report-generation service to produce a sub-type 1E alert report.
+
+```json
+{
+  "event_type": "image.blacklist_match",
+  "payload": {
+    "user_id": "...",
+    "blacklist_entry_id": "...",
+    "blacklist_entry_name": "...",
+    "blacklist_entry_version": 1,
+    "blacklist_reference_id": "...",
+    "blacklist_reference_url": "...",
+    "evidence_id": "...",
+    "matched_image_url": "...",
+    "matched_qdrant_point_id": "...",
+    "similarity_score": 0.893,
+    "threshold_used": 0.85,
+    "trigger": "inline",
+    "matched_at": "2026-05-05T14:22:03.501Z"
+  }
+}
+```
+
+The full DTO + field-by-field semantics live in [../requirements/REPORT_GENERATION_STREAMS.md §3](../requirements/REPORT_GENERATION_STREAMS.md) (the contract authority). Receiver dedups on `(evidence_id, blacklist_entry_id, blacklist_entry_version)` so a version bump (entry edit) produces fresh reports while a no-op republish does not.
+
 ## Consumer Groups
 
 | Stream | Consumer Group | Consumed By |
@@ -195,6 +239,8 @@ The backend receives the pre-computed query vector and executes the Qdrant searc
 | `evidence:search` | `compute-workers` | embedding-compute |
 | `embeddings:results` | `backend-workers` | embedding-backend |
 | `search:results` | `backend-workers` | embedding-backend |
+| `weapons:detected` | (configurable on receiver side) | report-generation |
+| `image:blacklist_match` | (configurable on receiver side) | report-generation |
 
 ## Dead Letter Streams
 

@@ -348,6 +348,124 @@ docker exec embedding-redis redis-cli -n 3 XINFO GROUPS embeddings:results
 
 ---
 
+## Manage blacklist entries
+
+The blacklist API is documented in full at [BLACKLIST_API.md](BLACKLIST_API.md). This section is a quick reference of the most common workflows.
+
+### Create an entry
+
+```bash
+curl -X POST http://localhost:8001/api/v1/blacklist/image-entries \
+  -H "X-User-Id: 550e8400-e29b-41d4-a716-446655440000" \
+  -H "X-User-Role: user" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Suspect plate — case 2026-042",
+    "category": "vehicle",
+    "description": "Vehicle linked to open investigation",
+    "match_threshold": 0.88
+  }'
+# → 201 Created with id, status=1 (CREATED), blacklist_version=1
+```
+
+### List entries (regular user)
+
+```bash
+# Default — only active entries owned by this tenant
+curl http://localhost:8001/api/v1/blacklist/image-entries \
+  -H "X-User-Id: 550e8400-e29b-41d4-a716-446655440000" \
+  -H "X-User-Role: user"
+
+# Include inactive entries
+curl "http://localhost:8001/api/v1/blacklist/image-entries?active=all" \
+  -H "X-User-Id: 550e8400-e29b-41d4-a716-446655440000" \
+  -H "X-User-Role: user"
+
+# Filter by category
+curl "http://localhost:8001/api/v1/blacklist/image-entries?category=vehicle" \
+  -H "X-User-Id: 550e8400-e29b-41d4-a716-446655440000" \
+  -H "X-User-Role: user"
+```
+
+### List entries (admin — across tenants)
+
+```bash
+# All entries, all tenants
+curl http://localhost:8001/api/v1/blacklist/image-entries \
+  -H "X-User-Id: admin-uuid" \
+  -H "X-User-Role: admin"
+
+# Scope to a specific tenant
+curl "http://localhost:8001/api/v1/blacklist/image-entries?user_id=550e8400-..." \
+  -H "X-User-Id: admin-uuid" \
+  -H "X-User-Role: admin"
+```
+
+### Update threshold (bumps version → fresh reports)
+
+```bash
+curl -X PATCH http://localhost:8001/api/v1/blacklist/image-entries/<ENTRY_ID> \
+  -H "X-User-Id: 550e8400-..." \
+  -H "X-User-Role: user" \
+  -H "Content-Type: application/json" \
+  -d '{"match_threshold": 0.92}'
+# → blacklist_version increments; receiver dedup key (evidence_id, entry_id, version) sees a new bucket
+```
+
+### Attach a reference image (triggers async embed)
+
+```bash
+curl -X POST http://localhost:8001/api/v1/blacklist/image-entries/<ENTRY_ID>/references \
+  -H "X-User-Id: 550e8400-..." \
+  -H "X-User-Role: user" \
+  -H "Content-Type: application/json" \
+  -d '{"image_url": "https://minio.lookia.mx/uploads/ref.jpg"}'
+# → 202 Accepted with status=1 (TO_PROCESS)
+# Poll GET /image-entries/<ENTRY_ID> until reference status=3 (PROCESSED)
+```
+
+### Delete a reference
+
+```bash
+curl -X DELETE http://localhost:8001/api/v1/blacklist/image-entries/<ENTRY_ID>/references/<REF_ID> \
+  -H "X-User-Id: 550e8400-..." \
+  -H "X-User-Role: user"
+# → 204 No Content
+```
+
+### Trigger a backfill (re-run reverse search for all references)
+
+Use after a threshold change, or as ops recovery if the natural reverse-search job was lost (backend restart mid-job).
+
+```bash
+curl -X POST http://localhost:8001/api/v1/blacklist/image-entries/<ENTRY_ID>/backfill \
+  -H "X-User-Id: 550e8400-..." \
+  -H "X-User-Role: user"
+# → 202 Accepted with the list of scheduled APScheduler job_ids
+```
+
+### Delete an entry (hard-delete + Qdrant cleanup)
+
+```bash
+curl -X DELETE http://localhost:8001/api/v1/blacklist/image-entries/<ENTRY_ID> \
+  -H "X-User-Id: 550e8400-..." \
+  -H "X-User-Role: user"
+# → 204 No Content
+# SQL cascades references + embeddings; Qdrant points cleaned up best-effort
+```
+
+### Inspect blacklist match events on the stream
+
+```bash
+# Count events
+docker exec embedding-redis redis-cli -n 3 XLEN image:blacklist_match
+
+# Last 3 events with full payload
+docker exec embedding-redis redis-cli -n 3 XREVRANGE image:blacklist_match + - COUNT 3
+```
+
+---
+
 ## Test Scripts
 
 ```bash

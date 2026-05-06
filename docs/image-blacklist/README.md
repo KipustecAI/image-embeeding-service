@@ -26,18 +26,27 @@ The plan is staged so the `category` infrastructure — useful on its own for na
 
 ## Phase index
 
-Phases must ship **in order**. Each is independently reviewable.
+Phases shipped **in order** between 2026-04-18 and 2026-05-06. Each commit is independently reviewable in `git log --grep image-blacklist`.
 
-| Phase | File | Scope |
+| Phase | Status | File | Commit | Scope |
+|---|---|---|---|---|
+| 0 | n/a | [00_CONTEXT.md](00_CONTEXT.md) | — | Problem, face-blacklist parallels, CLIP vs identity matching, risks (false-positive explosion, reverse-search cost, multi-tenant bleed) |
+| **1** | ✅ shipped | [01_CATEGORY.md](01_CATEGORY.md) | `8d03f5b` (+ stop-gap `e80de7c`) | Category infrastructure — Alembic migration, `category` column on `embedding_requests`, Qdrant payload index + MatchAny filter, search API field, producer payload contract update. Stop-gap translates upstream `entities: list[int]` to a stringified id while platform exposes a real taxonomy endpoint — see [requirements/IMAGE_COMPUTE_STREAMS.md](../requirements/IMAGE_COMPUTE_STREAMS.md) §2. |
+| 2 | ✅ shipped | [02_DATABASE.md](02_DATABASE.md) | `4c41780` | 3 blacklist tables (entries / references / embeddings) + Alembic migration + repo |
+| 3 | ✅ shipped | [03_QDRANT.md](03_QDRANT.md) | `64a89d8` | `source_type="blacklist"` tagging, payload indices, strict-filter helpers (`build_evidence_only_filter`, `build_blacklist_only_filter`), idempotent startup creation |
+| 4 | ✅ shipped | [04_EMBEDDING_FLOW.md](04_EMBEDDING_FLOW.md) | `a504c77` | Reuse `evidence:search` with `purpose` discriminator, consumer dispatch in `search_results_consumer`, async APScheduler reverse-search job, defensive error routing for `compute.error` envelopes |
+| 5 | ✅ shipped | [05_MATCH_AND_REPORT.md](05_MATCH_AND_REPORT.md) | `fa441b8` | Inline-match on new evidence ingest, `image:blacklist_match` event DTO + shared publisher, formalized [REPORT_GENERATION_STREAMS.md §3](../requirements/REPORT_GENERATION_STREAMS.md) 1E from placeholder to real contract |
+| 6 | ✅ shipped | [06_CRUD_API.md](06_CRUD_API.md) | `7381a17` | 8 REST endpoints under `/api/v1/blacklist/image-entries`, multi-tenant scoping (foreign tenants → 404), version-bump rules on PATCH, Qdrant cleanup on DELETE. Frontend contract published as [docs/BLACKLIST_API.md](../BLACKLIST_API.md). |
+| 7 | ✅ shipped | [07_DOCS_AND_VERIFICATION.md](07_DOCS_AND_VERIFICATION.md) | (this commit) | Stream-contracts doc + API_REFERENCE + CURL_EXAMPLES + root README updates; manual end-to-end verification checklist for ops to run pre-prod-flip |
+
+### Deviations from the original plan
+
+| Phase | Deviation | Why |
 |---|---|---|
-| 0 | [00_CONTEXT.md](00_CONTEXT.md) | Problem, face-blacklist parallels, CLIP vs identity matching, risks (false-positive explosion, reverse-search cost, multi-tenant bleed) |
-| **1** | [01_CATEGORY.md](01_CATEGORY.md) | **Prerequisite.** Category infrastructure — Alembic migration, `category` column on `embedding_requests`, Qdrant payload index + MatchAny filter, search API field, producer payload contract update |
-| 2 | [02_DATABASE.md](02_DATABASE.md) | 3 blacklist tables (entries / references / embeddings) + Alembic migration + repo |
-| 3 | [03_QDRANT.md](03_QDRANT.md) | `source_type="blacklist"` tagging, payload indices, strict-filter helper (`build_evidence_only_filter`, `build_blacklist_only_filter`), startup creation |
-| 4 | [04_EMBEDDING_FLOW.md](04_EMBEDDING_FLOW.md) | Reuse `evidence:search` with `purpose` discriminator, consumer dispatch in `search_results_consumer`, async reverse-search job |
-| 5 | [05_MATCH_AND_REPORT.md](05_MATCH_AND_REPORT.md) | Inline-match on new evidence ingest, `image:blacklist_match` event DTO, formalize [REPORT_GENERATION_STREAMS.md §3](../requirements/REPORT_GENERATION_STREAMS.md) 1E from placeholder to real contract |
-| 6 | [06_CRUD_API.md](06_CRUD_API.md) | REST endpoints for blacklist entries, reference images, backfill triggers, status queries |
-| 7 | [07_DOCS_AND_VERIFICATION.md](07_DOCS_AND_VERIFICATION.md) | User-facing doc updates + end-to-end verification plan |
+| 1 | Stored `category` as a JSON-stringified list of upstream entity ids (`"[2,5]"`) rather than a free-form label | Compute team shipped `entities: list[int]` instead of the requested `category: str`. Backend stop-gap added `entity_taxonomy.py` + a `GET /api/v1/search/categories` endpoint to translate ids → labels. Long-term resolution (platform exposes the taxonomy table) is tracked in [requirements/IMAGE_COMPUTE_STREAMS.md](../requirements/IMAGE_COMPUTE_STREAMS.md) §2. |
+| 4 | Added defensive error-routing for `compute.error` envelopes that don't carry `purpose` | Compute's `639d753` deliberately omits the dispatch fields on errors. Backend looks up `entity_id` in `blacklist_image_references` first, falls through to `search_requests` — see [04_EMBEDDING_FLOW.md §"Error routing"](04_EMBEDDING_FLOW.md). |
+| 5 | Added `infraction_code` to the Qdrant evidence payload | Reverse-search match events need it; previously required a DB roundtrip per match. Now passed inline. Trivial consumer-side change with no migration. |
+| 6 | Introduced `src/api/v1/{routers,schemas}` subpackage instead of inline `@app.get(...)` in `main.py` | `main.py` was already 620+ lines and adding 8 endpoints inline would push past 900. The router pattern is justifiable at this size. Other features (search, stats) remain inline; only the blacklist surface uses the new subpackage. |
 
 ## Out of scope
 

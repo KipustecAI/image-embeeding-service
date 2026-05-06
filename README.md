@@ -81,6 +81,7 @@ See `.env` for all available settings.
 | GET | `/api/v1/pipeline/status` | No | Full status (counts + triggers + consumers) |
 | POST | `/api/v1/internal/trigger/{name}` | No | Cross-process trigger notification |
 | POST | `/api/v1/recalculate/searches` | Yes | Re-queue searches for recalculation |
+| various | `/api/v1/blacklist/image-entries/...` | Yes | Image-blacklist CRUD — see [docs/BLACKLIST_API.md](docs/BLACKLIST_API.md) |
 
 See [docs/API_REFERENCE.md](docs/API_REFERENCE.md) for full details and [docs/CURL_EXAMPLES.md](docs/CURL_EXAMPLES.md) for usage examples.
 
@@ -90,9 +91,10 @@ See [docs/API_REFERENCE.md](docs/API_REFERENCE.md) for full details and [docs/CU
 2. **embedding-compute** (GPU) downloads the ZIP, extracts frames, runs diversity filter + CLIP, publishes vectors to `embeddings:results` with `embeddings: [{image_name, vector, image_index}, ...]` plus all ETL metadata passed through
 2a. **compute-weapons** *(optional)* If routing sends the evidence through the weapons-detection service, it enriches the `embeddings:results` message with a `weapon_analysis` block (per-image bboxes + evidence-level summary). Messages without this block take the legacy path unchanged.
 3. **This service** consumes from `embeddings:results`: downloads the ZIP again, extracts the filtered frames by name, uploads them to the `storage-service` (MinIO) to get permanent URLs, then stores vectors in Qdrant (multi-tenant + weapons payload) + PostgreSQL
-4. **Search** flows separately: `POST /api/v1/search` → `evidence:search` stream → GPU embeds the query image → `search:results` → this service executes the Qdrant search (with optional `weapons_filter`) and stores matches
+4. **Search** flows separately: `POST /api/v1/search` → `evidence:search` stream → GPU embeds the query image → `search:results` → this service executes the Qdrant search (with optional `weapons_filter` / `category` filter) and stores matches
+5. **Blacklist** *(optional, per user)*: users can register reference images via `POST /api/v1/blacklist/image-entries` and `.../references`. New evidence is auto-matched against the user's active blacklist entries on ingest; new blacklist entries trigger a background reverse-search against historical evidence. Matches publish `image:blacklist_match` events for the report-generation service. See [docs/BLACKLIST_API.md](docs/BLACKLIST_API.md) (consumer contract) and [docs/image-blacklist/](docs/image-blacklist/) (implementation phases).
 
-See [docs/new_arq_v2/04_STREAM_CONTRACTS.md](docs/new_arq_v2/04_STREAM_CONTRACTS.md) for full payload schemas and [docs/weapons/](docs/weapons/) for the weapons-enrichment design.
+See [docs/new_arq_v2/04_STREAM_CONTRACTS.md](docs/new_arq_v2/04_STREAM_CONTRACTS.md) for full payload schemas, [docs/weapons/](docs/weapons/) for the weapons-enrichment design, and [docs/image-blacklist/](docs/image-blacklist/) for the CLIP-blacklist feature.
 
 ## Background Jobs (Safety Nets)
 
