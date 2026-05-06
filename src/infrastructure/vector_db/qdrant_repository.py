@@ -332,6 +332,32 @@ class QdrantVectorRepository(VectorRepository):
             logger.error(f"Error deleting embedding {embedding_id}: {e}")
             return False
 
+    async def store_raw_point(self, point_id: str, vector: list, payload: dict) -> bool:
+        """Upsert a raw point into the evidence_embeddings collection.
+
+        Used by the blacklist-embed flow (Phase 04) where the caller owns
+        the payload shape directly — we don't want to coerce a blacklist
+        point through the ImageEmbedding domain entity, which is scoped
+        to evidence vectors.
+
+        Caller is responsible for setting source_type="blacklist" so the
+        point doesn't leak into user-facing similarity searches. See
+        src/application/helpers/source_type_filter.py.
+        """
+        try:
+            point = PointStruct(id=point_id, vector=vector, payload=payload)
+            result = self.client.upsert(
+                collection_name=self.collection_name, points=[point], wait=True
+            )
+            if result.status == UpdateStatus.COMPLETED:
+                logger.debug(f"Stored raw point {point_id}")
+                return True
+            logger.error(f"Failed to store raw point {point_id}: {result}")
+            return False
+        except Exception as e:
+            logger.error(f"Error storing raw point {point_id}: {e}")
+            return False
+
     async def store_query_vector(self, point_id: str, vector: list, search_id: str) -> bool:
         """Store a search query vector in the search_queries collection."""
         try:

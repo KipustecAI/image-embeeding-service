@@ -31,6 +31,11 @@ from src.infrastructure.config import get_settings
 from src.infrastructure.database import engine, get_session
 from src.infrastructure.entity_taxonomy import resolve_entity_label
 from src.infrastructure.vector_db.qdrant_repository import QdrantVectorRepository
+from src.services.blacklist_embed_service import set_blacklist_vector_repo
+from src.services.blacklist_reverse_search import (
+    set_reverse_search_scheduler,
+    set_reverse_search_vector_repo,
+)
 from src.services.safety_nets import (
     cleanup_old_requests,
     recalculate_searches,
@@ -87,6 +92,10 @@ async def lifespan(app: FastAPI):
     set_vector_repo(vector_repo)
     set_search_vector_repo(vector_repo)
     set_safety_nets_vector_repo(vector_repo)
+    # Blacklist Phase 04 — embed service stores raw points + reverse search
+    # queries Qdrant for matches. Same instance, distinct entry points.
+    set_blacklist_vector_repo(vector_repo)
+    set_reverse_search_vector_repo(vector_repo)
     logger.info("Qdrant connected")
 
     # 2b. Storage uploader (for ZIP flow image uploads)
@@ -127,6 +136,10 @@ async def lifespan(app: FastAPI):
         misfire_grace_time=600,
     )
     scheduler.start()
+    # Blacklist reverse-search jobs are added on demand from
+    # store_blacklist_embedding (Phase 04). Inject the same scheduler so
+    # they run in-process alongside the periodic safety nets.
+    set_reverse_search_scheduler(scheduler)
     logger.info("Scheduler started (stale recovery, recalculation, cleanup)")
 
     # 4. Stream Consumers (consume output from GPU compute service)

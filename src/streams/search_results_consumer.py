@@ -1,20 +1,35 @@
 """Consumer for search:results stream — receives pre-computed query vectors from GPU service.
 
-Executes Qdrant search and stores individual match results in search_matches table.
+Dispatches by ``purpose`` field:
+
+* ``purpose="search"`` (default) — runs Qdrant similarity search and persists
+  matches in ``search_matches``. Existing user-facing flow.
+* ``purpose="blacklist_embed"`` — stores the vector as a blacklist point and
+  schedules a reverse-search job (Phase 04, see
+  docs/image-blacklist/04_EMBEDDING_FLOW.md).
+
+The compute service echoes ``purpose`` byte-identical so legacy callers
+(no field) get the default ``"search"`` behavior unchanged.
 """
 
 import asyncio
 import logging
 import uuid as uuid_mod
 from datetime import datetime
+from uuid import UUID
 
 import numpy as np
 
 from ..application.helpers.source_type_filter import build_evidence_only_filter
 from ..application.helpers.weapon_filters import build_weapon_filter_conditions
-from ..db.models.constants import SearchRequestStatus, SimilarityStatus
+from ..db.models.constants import (
+    BlacklistReferenceStatus,
+    SearchRequestStatus,
+    SimilarityStatus,
+)
 from ..db.models.search_match import SearchMatch
 from ..db.repositories import SearchRequestRepository
+from ..db.repositories.blacklist_image_repo import BlacklistImageRepository
 from ..infrastructure.config import get_settings
 from ..infrastructure.database import get_session
 from .consumer import StreamConsumer
@@ -72,13 +87,18 @@ def _handle_compute_error(event_type: str, payload: dict, message_id: str):
 
 
 async def _process_search_result(payload: dict, message_id: str):
-    """Receive query vector → search Qdrant → store match results in DB."""
+    """Receive query vector → dispatch by ``purpose`` → search or blacklist-embed."""
     search_id = payload.get("search_id", "")
     user_id = payload.get("user_id", "")
     vector = payload.get("vector")
+    purpose = payload.get("purpose", "search")
 
     if not search_id or vector is None:
         logger.warning(f"Skipping search result with missing data: {search_id}")
+        return
+
+    if purpose == "blacklist_embed":
+        await _process_blacklist_embed_result(payload, message_id)
         return
 
     threshold = payload.get("threshold", 0.75)
@@ -195,7 +215,74 @@ async def _process_search_result(payload: dict, message_id: str):
                 request.error_message = str(e)[:500]
 
 
+async def _process_blacklist_embed_result(payload: dict, message_id: str):
+    """Hand off a blacklist_embed result to the embed service.
+
+    ``search_id`` here is overloaded — for blacklist embeds it carries the
+    ``BlacklistImageReference.id`` rather than a regular search id. See
+    docs/image-blacklist/04_EMBEDDING_FLOW.md §"The purpose field" for the
+    rationale (we accepted the overloading rather than adding a parallel
+    ``reference_id`` field that the GPU would have to echo).
+    """
+    reference_id_raw = payload.get("search_id", "")
+    entry_id_raw = payload.get("blacklist_entry_id")
+    user_id = payload.get("user_id", "")
+    vector = payload.get("vector")
+
+    if not entry_id_raw:
+        logger.error(
+            "blacklist_embed result missing blacklist_entry_id (ref=%s); dropping",
+            reference_id_raw,
+        )
+        return
+
+    try:
+        reference_uuid = UUID(reference_id_raw)
+        entry_uuid = UUID(entry_id_raw)
+    except (TypeError, ValueError) as e:
+        logger.error(
+            "blacklist_embed result has malformed UUIDs (ref=%s entry=%s err=%s); dropping",
+            reference_id_raw,
+            entry_id_raw,
+            e,
+        )
+        return
+
+    # Imported here to avoid a circular import at module load — the embed
+    # service imports from this consumer's siblings, and we only need it
+    # on the blacklist path which is rare relative to the search path.
+    from ..services.blacklist_embed_service import store_blacklist_embedding
+
+    try:
+        await store_blacklist_embedding(
+            entry_id=entry_uuid,
+            reference_id=reference_uuid,
+            user_id=user_id,
+            vector=list(vector),
+            stream_msg_id=message_id,
+        )
+    except Exception as e:
+        # Don't mark PROCESSED — the consumer's retry will redeliver.
+        logger.error(
+            "Failed to store blacklist embedding entry=%s ref=%s: %s",
+            entry_uuid,
+            reference_uuid,
+            e,
+            exc_info=True,
+        )
+
+
 async def _process_compute_error(payload: dict):
+    """Mark either a search request or a blacklist reference as ERROR.
+
+    Compute's ``compute.error`` envelope **does not carry ``purpose``** —
+    see docs/image-blacklist/04_EMBEDDING_FLOW.md §"Error routing" and the
+    upstream contract at image-embedding-compute/docs/CONTRACT.md §3.4.
+    We dispatch by looking up ``entity_id`` first in the blacklist
+    references table (cheap UUID PK lookup) and fall through to the
+    search-requests path on miss. UUID-namespace collisions across the
+    two tables are not possible in practice.
+    """
     entity_id = payload.get("entity_id", "")
     entity_type = payload.get("entity_type", "")
     error = payload.get("error", "Unknown compute error")
@@ -203,6 +290,27 @@ async def _process_compute_error(payload: dict):
     if entity_type != "search":
         return
 
+    # Try blacklist-reference resolution first.
+    try:
+        ref_uuid: UUID | None = UUID(entity_id)
+    except (TypeError, ValueError):
+        ref_uuid = None
+
+    if ref_uuid is not None:
+        async with get_session() as session:
+            bl_repo = BlacklistImageRepository(session)
+            reference = await bl_repo.get_reference(ref_uuid)
+            if reference is not None:
+                await bl_repo.update_reference_status(
+                    reference.id,
+                    status=BlacklistReferenceStatus.ERROR,
+                    error=f"Compute error: {error}"[:500],
+                )
+        if reference is not None:
+            logger.error("Blacklist embed compute error: ref=%s err=%s", ref_uuid, error)
+            return
+
+    # Fall through to the legacy search-request path.
     async with get_session() as session:
         repo = SearchRequestRepository(session)
         request = await repo.get_by_search_id(entity_id)
