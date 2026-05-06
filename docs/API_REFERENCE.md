@@ -27,10 +27,12 @@ See [GATEWAY_HEADERS.md](../../lookia/microservices/video-server_microservicios_
 | GET | `/api/v1/stats` | Pipeline counts + Qdrant stats |
 | GET | `/api/v1/pipeline/status` | Full status (counts + consumers) |
 | POST | `/api/v1/search` | Submit a similarity search |
+| GET | `/api/v1/search/categories` | List distinct categories (entity ids + labels) visible to the tenant |
 | GET | `/api/v1/search/{search_id}` | Get search status |
 | GET | `/api/v1/search/{search_id}/matches` | Get match results (paginated) |
 | GET | `/api/v1/search/user/{user_id}` | List searches by user (paginated) |
 | POST | `/api/v1/recalculate/searches` | Re-queue old searches for recalculation |
+| — | `/api/v1/blacklist/image-entries/...` | **Blacklist (Image)** — see [BLACKLIST_API.md](BLACKLIST_API.md) for the full surface (8 endpoints) |
 
 ---
 
@@ -144,6 +146,7 @@ Creates a search request and publishes it to the GPU compute stream. The GPU com
 | max_results | int | no | 50 | Maximum number of results |
 | weapons_filter | string | no | `"all"` | `all` \| `only` \| `exclude` \| `analyzed_clean` — see below |
 | weapon_classes | list[str] | no | null | Class subset (e.g. `["handgun"]`). Only meaningful with `weapons_filter="only"`; ignored otherwise. |
+| category | string \| list[str] | no | null | Narrow results by upstream taxonomy entity id, sent as a string (e.g. `"2"` or `["2", "5"]`). Scalar matches exact; list uses MatchAny (any of the requested ids match). The frontend should populate the dropdown via `GET /api/v1/search/categories` rather than hardcode ids. See [../requirements/IMAGE_COMPUTE_STREAMS.md](../requirements/IMAGE_COMPUTE_STREAMS.md) §2 for the upstream taxonomy negotiation. |
 | metadata | object | no | null | Filter conditions (camera_id, object_type) |
 
 `user_id` is automatically taken from the `X-User-Id` gateway header.
@@ -178,6 +181,45 @@ POST /api/v1/search
   → Backend searches Qdrant → stores matches in DB
   → status=completed
 ```
+
+---
+
+## GET /api/v1/search/categories — List Available Categories
+
+Returns the distinct entity-id categories that have data for the requesting tenant, with their human-readable labels. Designed to populate a frontend filter dropdown — frontend then sends the chosen `id` (as a string) on `POST /api/v1/search` via the `category` field.
+
+**Request:**
+```http
+GET /api/v1/search/categories
+X-User-Id: 550e8400-e29b-41d4-a716-446655440000
+X-User-Role: user
+```
+
+**Response (200 OK):**
+```json
+{
+  "categories": [
+    { "id": 0, "label": "person" },
+    { "id": 2, "label": "car" },
+    { "id": 5, "label": "bus" }
+  ]
+}
+```
+
+`id` is sorted ascending. `label` is always a non-null string — unknown ids resolve to `"unk"` so the dropdown never shows raw ints. Tenant scope: regular users only see ids that appear in their own evidence; admins/root/dev see all tenants.
+
+**Empty result is normal early in rollout:**
+```json
+{ "categories": [] }
+```
+This means no evidence has been ingested with non-null `entities` yet for this tenant. Frontend should hide the filter or show a placeholder.
+
+**Why labels may say `"unk"`:** the backend currently uses a hardcoded YOLO/COCO-80 stop-gap map (see [../../src/infrastructure/entity_taxonomy.py](../../src/infrastructure/entity_taxonomy.py)). The authoritative `t_configurations.entities` taxonomy lives on the platform side and will replace the hardcoded map in a follow-up. See [../requirements/IMAGE_COMPUTE_STREAMS.md](../requirements/IMAGE_COMPUTE_STREAMS.md) §2.
+
+**Errors:**
+| Status | When |
+|---|---|
+| 401 | Missing `X-User-Id` for a non-admin caller |
 
 ---
 
@@ -307,6 +349,27 @@ Searches created before the query vector storage feature was added are skipped (
 
 ---
 
+## Blacklist (Image)
+
+CLIP-based blacklist for flagging incoming evidence that visually matches user-registered reference images. Eight endpoints under `/api/v1/blacklist/image-entries`. **Full contract:** [BLACKLIST_API.md](BLACKLIST_API.md).
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/api/v1/blacklist/image-entries` | Create a blacklist entry |
+| GET | `/api/v1/blacklist/image-entries` | List entries (paginated, multi-tenant) |
+| GET | `/api/v1/blacklist/image-entries/{id}` | Entry detail with references |
+| PATCH | `/api/v1/blacklist/image-entries/{id}` | Partial update (name, threshold, active, etc.) |
+| DELETE | `/api/v1/blacklist/image-entries/{id}` | Hard-delete entry + references + Qdrant points |
+| POST | `/api/v1/blacklist/image-entries/{id}/references` | Attach a reference image (async embed) |
+| DELETE | `/api/v1/blacklist/image-entries/{id}/references/{ref_id}` | Remove a reference + its Qdrant point |
+| POST | `/api/v1/blacklist/image-entries/{id}/backfill` | Re-run reverse search on all references |
+
+**Auth:** same `X-User-Id` / `X-User-Role` gateway headers as the search API. Non-admin callers see only their own tenant; admin/root/dev roles can see all and use `?user_id=<uuid>` to scope.
+
+**How matches surface:** matches don't come back through this API — they're published as `image:blacklist_match` events to the report-generation service. See [requirements/REPORT_GENERATION_STREAMS.md §3](requirements/REPORT_GENERATION_STREAMS.md) for the wire shape, or [BLACKLIST_API.md](BLACKLIST_API.md) for the user-facing workflow.
+
+---
+
 ## Event-Driven Processing
 
 ### Evidence Embedding (via Redis Streams)
@@ -339,7 +402,7 @@ Uses stored query vectors — no GPU, no image re-download. ~100ms per search.
 
 | Collection | Purpose |
 |------------|---------|
-| `evidence_embeddings` | Evidence image vectors (512-dim CLIP ViT-B-32, cosine distance). Payload indices on `evidence_id`, `camera_id`, `source_type`, `user_id`, `device_id`, `app_id` (multi-tenant filtering), plus `weapon_analyzed`, `has_weapon`, `weapon_classes` (weapons filtering — see [../weapons/](../weapons/)) |
+| `evidence_embeddings` | Evidence and blacklist image vectors (512-dim CLIP ViT-B-32, cosine distance). Discriminated by the `source_type` payload field (`"evidence"` vs `"blacklist"`). Payload indices: `source_type`, `camera_id`, `evidence_id`, `user_id`, `device_id`, `app_id` (multi-tenant filtering), `weapon_analyzed`, `has_weapon`, `weapon_classes` (weapons — see [weapons/](weapons/)), `category` (entity-id filter — see [image-blacklist/01_CATEGORY.md](image-blacklist/01_CATEGORY.md)), `blacklist_entry_id` (blacklist scoping — see [image-blacklist/03_QDRANT.md](image-blacklist/03_QDRANT.md)). Strict source-type filtering at search time prevents blacklist points from leaking into user-facing results. |
 | `search_queries` | Stored query vectors for recalculation. One point per search, payload: `search_id` only |
 
 ## Database Tables

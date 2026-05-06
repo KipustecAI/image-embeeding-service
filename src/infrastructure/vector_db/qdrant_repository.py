@@ -41,6 +41,12 @@ _EVIDENCE_PAYLOAD_INDICES: list[tuple[str, str]] = [
     ("weapon_analyzed", "bool"),
     ("has_weapon", "bool"),
     ("weapon_classes", "keyword"),
+    # Category — see docs/image-blacklist/01_CATEGORY.md
+    ("category", "keyword"),
+    # Image blacklist — see docs/image-blacklist/03_QDRANT.md.
+    # source_type already indexed above; blacklist points add blacklist_entry_id
+    # so we can retrieve a specific entry's points for deletion / re-matching.
+    ("blacklist_entry_id", "keyword"),
 ]
 
 
@@ -244,11 +250,21 @@ class QdrantVectorRepository(VectorRepository):
                 else:
                     created_at = datetime.utcnow()
 
+                # Inject the Qdrant point id into the metadata dict. The
+                # blacklist-match flow needs to know which specific point
+                # matched (it goes onto the report event); the user-facing
+                # search flow reads matched_qdrant_point_id from here too
+                # when we build the SearchMatch row. Keys starting with the
+                # field name (no leading underscore) so it surfaces cleanly
+                # in JSON when the caller serializes metadata.
+                enriched_payload = dict(payload)
+                enriched_payload["qdrant_point_id"] = str(result.id)
+
                 search_result = SearchResult(
                     evidence_id=payload.get("evidence_id", result.id),
                     image_url=payload.get("image_url", ""),
                     similarity_score=result.score,
-                    metadata=payload,
+                    metadata=enriched_payload,
                     camera_id=camera_id,
                     created_at=created_at,
                 )
@@ -324,6 +340,63 @@ class QdrantVectorRepository(VectorRepository):
 
         except Exception as e:
             logger.error(f"Error deleting embedding {embedding_id}: {e}")
+            return False
+
+    async def delete_points(self, point_ids: list[str]) -> bool:
+        """Bulk-delete points from the evidence_embeddings collection.
+
+        Used by the blacklist CRUD path when an entry or reference is
+        removed — the caller pulls the qdrant_point_ids from SQL first,
+        then asks us to clean up Qdrant. Empty input is a fast no-op
+        (callers don't need to guard).
+
+        Returns ``True`` on a successful delete (or empty input),
+        ``False`` on any failure. The caller's policy when False:
+        leave the SQL row in place so an admin can retry — better an
+        orphaned blacklist entry in SQL than orphaned Qdrant points
+        that keep silently matching against evidence.
+        """
+        if not point_ids:
+            return True
+        try:
+            result = self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=point_ids,
+                wait=True,
+            )
+            if result.status == UpdateStatus.COMPLETED:
+                logger.info(f"Deleted {len(point_ids)} points from {self.collection_name}")
+                return True
+            logger.error(f"Failed to delete {len(point_ids)} points: {result}")
+            return False
+        except Exception as e:
+            logger.error(f"Error deleting {len(point_ids)} points: {e}")
+            return False
+
+    async def store_raw_point(self, point_id: str, vector: list, payload: dict) -> bool:
+        """Upsert a raw point into the evidence_embeddings collection.
+
+        Used by the blacklist-embed flow (Phase 04) where the caller owns
+        the payload shape directly — we don't want to coerce a blacklist
+        point through the ImageEmbedding domain entity, which is scoped
+        to evidence vectors.
+
+        Caller is responsible for setting source_type="blacklist" so the
+        point doesn't leak into user-facing similarity searches. See
+        src/application/helpers/source_type_filter.py.
+        """
+        try:
+            point = PointStruct(id=point_id, vector=vector, payload=payload)
+            result = self.client.upsert(
+                collection_name=self.collection_name, points=[point], wait=True
+            )
+            if result.status == UpdateStatus.COMPLETED:
+                logger.debug(f"Stored raw point {point_id}")
+                return True
+            logger.error(f"Failed to store raw point {point_id}: {result}")
+            return False
+        except Exception as e:
+            logger.error(f"Error storing raw point {point_id}: {e}")
             return False
 
     async def store_query_vector(self, point_id: str, vector: list, search_id: str) -> bool:

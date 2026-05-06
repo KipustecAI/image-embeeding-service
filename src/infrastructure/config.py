@@ -87,6 +87,14 @@ class Settings(BaseSettings):
     )
     max_search_results: int = Field(100, validation_alias="MAX_SEARCH_RESULTS")
 
+    # Image Blacklist — Phase 04 (see docs/image-blacklist/04_EMBEDDING_FLOW.md)
+    # Higher than the search default (0.75) because false positives here are
+    # more harmful — a stray match would trigger a downstream alert.
+    blacklist_match_threshold: float = Field(0.85, validation_alias="BLACKLIST_MATCH_THRESHOLD")
+    blacklist_reverse_search_batch_size: int = Field(
+        1000, validation_alias="BLACKLIST_REVERSE_SEARCH_BATCH_SIZE"
+    )
+
     @field_validator("environment")
     @classmethod
     def validate_environment(cls, v: str) -> str:

@@ -25,6 +25,11 @@ class EmbeddingRequest(Base):
     app_id = Column(Integer, nullable=True)
     infraction_code = Column(String(255), nullable=True, index=True)
 
+    # Human-assigned evidence category (e.g. "vehicle", "scene", "infraction_pattern").
+    # Optional, nullable. Used for search narrowing + blacklist scoping.
+    # See docs/image-blacklist/01_CATEGORY.md.
+    category = Column(Text, nullable=True, index=True)
+
     # Weapons enrichment — see docs/weapons/01_DATABASE.md
     weapon_analyzed = Column(Boolean, nullable=False, default=False, index=True)
     has_weapon = Column(Boolean, nullable=False, default=False, index=True)

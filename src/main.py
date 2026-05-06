@@ -5,6 +5,7 @@ Stores directly in Qdrant + PostgreSQL — no ARQ queue for the happy path.
 """
 
 import asyncio
+import json
 import logging
 import sys
 from datetime import datetime
@@ -23,11 +24,20 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from src.api.dependencies import UserContext, get_user_context
+from src.api.v1.routers import blacklist_image as blacklist_image_router
+from src.application.helpers.source_type_filter import build_evidence_only_filter
 from src.application.helpers.weapon_filters import build_weapon_filter_conditions
 from src.db.repositories import EmbeddingRequestRepository, SearchRequestRepository
 from src.infrastructure.config import get_settings
 from src.infrastructure.database import engine, get_session
+from src.infrastructure.entity_taxonomy import resolve_entity_label
 from src.infrastructure.vector_db.qdrant_repository import QdrantVectorRepository
+from src.services.blacklist_embed_service import set_blacklist_vector_repo
+from src.services.blacklist_match_service import set_blacklist_match_stream_producer
+from src.services.blacklist_reverse_search import (
+    set_reverse_search_scheduler,
+    set_reverse_search_vector_repo,
+)
 from src.services.safety_nets import (
     cleanup_old_requests,
     recalculate_searches,
@@ -84,6 +94,10 @@ async def lifespan(app: FastAPI):
     set_vector_repo(vector_repo)
     set_search_vector_repo(vector_repo)
     set_safety_nets_vector_repo(vector_repo)
+    # Blacklist Phase 04 — embed service stores raw points + reverse search
+    # queries Qdrant for matches. Same instance, distinct entry points.
+    set_blacklist_vector_repo(vector_repo)
+    set_reverse_search_vector_repo(vector_repo)
     logger.info("Qdrant connected")
 
     # 2b. Storage uploader (for ZIP flow image uploads)
@@ -101,6 +115,17 @@ async def lifespan(app: FastAPI):
         redis_db=settings.redis_streams_db,
     )
     set_stream_producer(stream_producer)
+    # Same producer routes the image.blacklist_match events (Phase 05)
+    # to the report-generation stream — see
+    # docs/requirements/REPORT_GENERATION_STREAMS.md §3.
+    set_blacklist_match_stream_producer(stream_producer)
+    # The blacklist CRUD router (Phase 06) needs Qdrant for cleanup on
+    # delete + the StreamProducer to publish embed requests on reference
+    # add. Wire after both singletons exist.
+    blacklist_image_router.set_blacklist_router_deps(
+        vector_repo=vector_repo,
+        stream_producer=stream_producer,
+    )
     logger.info("Stream producer ready")
 
     # 4. APScheduler — safety nets + periodic tasks
@@ -124,6 +149,10 @@ async def lifespan(app: FastAPI):
         misfire_grace_time=600,
     )
     scheduler.start()
+    # Blacklist reverse-search jobs are added on demand from
+    # store_blacklist_embedding (Phase 04). Inject the same scheduler so
+    # they run in-process alongside the periodic safety nets.
+    set_reverse_search_scheduler(scheduler)
     logger.info("Scheduler started (stale recovery, recalculation, cleanup)")
 
     # 4. Stream Consumers (consume output from GPU compute service)
@@ -165,6 +194,9 @@ app = FastAPI(
     version="2.1.0",
     lifespan=lifespan,
 )
+
+# Image-blacklist CRUD (Phase 06) — see docs/BLACKLIST_API.md.
+app.include_router(blacklist_image_router.router)
 
 
 # ── Health & Stats ──
@@ -272,6 +304,9 @@ class SearchCreateRequest(BaseModel):
     # Weapons filter — see docs/weapons/04_SEARCH_API.md
     weapons_filter: Literal["all", "only", "exclude", "analyzed_clean"] = "all"
     weapon_classes: list[str] | None = None
+    # Category filter — see docs/image-blacklist/01_CATEGORY.md
+    # Scalar → Qdrant MatchValue; list → MatchAny (any of the requested categories match).
+    category: str | list[str] | None = None
 
 
 @app.post("/api/v1/search", status_code=202)
@@ -299,6 +334,12 @@ async def create_search(
             )
         else:
             metadata["weapon_classes"] = list(body.weapon_classes)
+
+    # Category filter — scalar or list. See docs/image-blacklist/01_CATEGORY.md.
+    if body.category:
+        metadata["category"] = (
+            list(body.category) if isinstance(body.category, list) else body.category
+        )
 
     # Create DB row (status=TO_WORK)
     async with get_session() as session:
@@ -331,6 +372,70 @@ async def create_search(
         "status": "pending",
         "message": f"Search submitted, check status at /api/v1/search/{search_id}",
     }
+
+
+@app.get("/api/v1/search/categories")
+async def list_search_categories(
+    ctx: UserContext = Depends(get_user_context),
+):
+    """Distinct entity-id categories visible to this tenant, with human labels.
+
+    Each evidence is tagged by upstream ETL with `entities: list[int]` (ids
+    drawn from `t_configurations.entities`). The consumer stores the sorted-
+    deduped id list as a JSON string in `embedding_requests.category` (e.g.
+    `"[2,5]"`). This endpoint flattens those lists across the tenant's data
+    into a unique set of ids, resolves each to a human label, and returns
+    them sorted by id.
+
+    Frontend uses the result to populate a search-filter dropdown. Filter
+    requests on POST /api/v1/search send the stringified id (e.g. `"2"`),
+    which Qdrant matches against the `category` payload list via MatchAny.
+
+    Label resolution is a stop-gap — see src/infrastructure/entity_taxonomy.py
+    and docs/requirements/IMAGE_COMPUTE_STREAMS.md §2 for the migration path
+    to a runtime-cached taxonomy from the platform team.
+    """
+    # Admin/root see all tenants; everyone else is scoped to their owner_id.
+    is_admin = ctx.role in ("admin", "root", "dev")
+    scope_user_id = None if is_admin else ctx.owner_id
+
+    if not is_admin and not scope_user_id:
+        raise HTTPException(status_code=401, detail="Missing X-User-Id")
+
+    async with get_session() as session:
+        if scope_user_id:
+            result = await session.execute(
+                text(
+                    "SELECT DISTINCT category FROM embedding_requests "
+                    "WHERE category IS NOT NULL AND user_id = :uid"
+                ),
+                {"uid": scope_user_id},
+            )
+        else:
+            result = await session.execute(
+                text("SELECT DISTINCT category FROM embedding_requests WHERE category IS NOT NULL")
+            )
+        rows = result.scalars().all()
+
+    # Each row is a JSON-encoded list like "[2,5]". Defensive parse — bad
+    # rows (legacy data, hand-edited values) are skipped rather than 500'd.
+    flat_ids: set[int] = set()
+    for raw in rows:
+        try:
+            ids = json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(ids, list):
+            continue
+        for entity_id in ids:
+            if isinstance(entity_id, int):
+                flat_ids.add(entity_id)
+
+    categories = [
+        {"id": entity_id, "label": resolve_entity_label(entity_id)}
+        for entity_id in sorted(flat_ids)
+    ]
+    return {"categories": categories}
 
 
 @app.get("/api/v1/search/{search_id}")
@@ -460,11 +565,15 @@ async def trigger_recalculation(
             filter_conditions: dict = {}
             if s.search_metadata:
                 filter_conditions = {
-                    k: v for k, v in s.search_metadata.items() if k in ("camera_id", "object_type")
+                    k: v
+                    for k, v in s.search_metadata.items()
+                    if k in ("camera_id", "object_type", "category")
                 }
                 filter_conditions.update(build_weapon_filter_conditions(s.search_metadata))
-            if not filter_conditions:
-                filter_conditions = None
+
+            # User-facing search — never return blacklist points.
+            # See docs/image-blacklist/03_QDRANT.md.
+            filter_conditions = build_evidence_only_filter(filter_conditions)
 
             matches = await vector_repo.search_similar(
                 query_vector=np.array(query_vector_list, dtype=np.float32),

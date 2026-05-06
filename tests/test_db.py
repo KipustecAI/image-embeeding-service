@@ -248,6 +248,61 @@ async def test_weapon_analysis_error_persists(session):
     assert found.weapon_summary is None
 
 
+# ── Category (Phase 01 of image-blacklist) ────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_category_defaults_to_null(session):
+    """Legacy callers that don't pass category leave it NULL."""
+    from src.db.repositories import EmbeddingRequestRepository
+
+    repo = EmbeddingRequestRepository(session)
+    request = await repo.create_request(
+        evidence_id=f"cat-null-{uuid4()}",
+        camera_id="cam-1",
+        image_urls=[],
+    )
+    await session.commit()
+    assert request.category is None
+
+
+@pytest.mark.asyncio
+async def test_category_persists(session):
+    """Category round-trips via the repo."""
+    from src.db.repositories import EmbeddingRequestRepository
+
+    repo = EmbeddingRequestRepository(session)
+    request = await repo.create_request(
+        evidence_id=f"cat-{uuid4()}",
+        camera_id="cam-1",
+        image_urls=[],
+        category="vehicle",
+    )
+    await session.commit()
+
+    found = await repo.get_by_id(request.id)
+    assert found is not None
+    assert found.category == "vehicle"
+
+
+@pytest.mark.asyncio
+async def test_category_accepts_arbitrary_strings(session):
+    """No enum validation — producer decides the vocabulary."""
+    from src.db.repositories import EmbeddingRequestRepository
+
+    repo = EmbeddingRequestRepository(session)
+    for cat in ("vehicle", "scene", "infraction_pattern", "custom_category_123"):
+        request = await repo.create_request(
+            evidence_id=f"cat-var-{cat}-{uuid4()}",
+            camera_id="cam-1",
+            image_urls=[],
+            category=cat,
+        )
+        await session.commit()
+        found = await repo.get_by_id(request.id)
+        assert found.category == cat
+
+
 @pytest.mark.asyncio
 async def test_four_weapon_states_are_distinguishable(session):
     """The new error column enables distinguishing four reachable states:
