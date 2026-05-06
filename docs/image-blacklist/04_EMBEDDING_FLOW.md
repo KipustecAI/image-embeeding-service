@@ -118,6 +118,61 @@ async def _process_blacklist_embed_result(payload: dict, message_id: str):
 
 The existing search path is untouched — its code runs when `purpose != "blacklist_embed"`.
 
+## Error routing — `compute.error` does NOT carry `purpose`
+
+Per the upstream compute contract (commit `639d753`, [CONTRACT.md §3.4](../../../image-embedding-compute/docs/CONTRACT.md)), the `compute.error` envelope published to `search:results` on GPU-side failure **deliberately omits `purpose` and `blacklist_entry_id`**. Compute's reasoning: the failure mode is structurally identical regardless of intent. See [../requirements/IMAGE_COMPUTE_STREAMS.md](../requirements/IMAGE_COMPUTE_STREAMS.md) §3 for the negotiation trail.
+
+That means our `_handle_compute_error` path can't branch on `purpose` — it only has `entity_id` (which carries either a `SearchRequest.search_id` or a `BlacklistImageReference.id`, depending on the purpose of the original request). We resolve which one by looking it up:
+
+```python
+async def _process_compute_error(payload: dict):
+    entity_id = payload.get("entity_id", "")
+    entity_type = payload.get("entity_type", "")
+    error = payload.get("error", "Unknown compute error")
+
+    # The producer ONLY emits entity_type="search" for the evidence:search flow
+    # (both purposes share the same stream). Dispatch by looking up the id —
+    # NOT by envelope fields, because compute.error doesn't carry `purpose`.
+    if entity_type != "search":
+        return
+
+    async with get_session() as session:
+        # Try blacklist first (shorter table, indexed lookup on id PK)
+        bl_repo = BlacklistImageRepository(session)
+        try:
+            ref_uuid = UUID(entity_id)
+        except ValueError:
+            ref_uuid = None
+
+        reference = await bl_repo.get_reference(ref_uuid) if ref_uuid else None
+
+        if reference is not None:
+            await bl_repo.update_reference_status(
+                reference.id,
+                status=BlacklistReferenceStatus.ERROR,
+                error_message=f"Compute error: {error}"[:500],
+            )
+            logger.error(
+                f"Blacklist embed compute error: ref={reference.id} err={error}"
+            )
+            return
+
+        # Fall back to search request path (existing behavior)
+        sr_repo = SearchRequestRepository(session)
+        request = await sr_repo.get_by_search_id(entity_id)
+        if request:
+            request.status = SearchRequestStatus.ERROR
+            request.error_message = f"Compute error: {error}"[:500]
+        # ... (existing else-branch preserved)
+```
+
+Two properties worth calling out:
+
+1. **Lookup order matters.** `blacklist_image_references.id` is a UUID PK — a lookup miss is cheap (indexed scan, no rows returned). The fallback to `SearchRequestRepository.get_by_search_id` preserves today's behavior for non-blacklist errors.
+2. **Collision impossible in practice.** Both tables use UUID PKs; a UUID minted for a `BlacklistImageReference` cannot collide with one minted for a `SearchRequest`. If some future contract hands us a non-UUID `entity_id`, the `UUID(entity_id)` parse guard drops us straight to the search path.
+
+If compute ever decides to carry `purpose` on `compute.error` (we'd accept it gracefully), this lookup becomes redundant — but the fallback logic is cheap to leave in place as defense-in-depth.
+
 ## `BlacklistEmbedService` — the success path
 
 New file `src/services/blacklist_embed_service.py`:
@@ -327,6 +382,7 @@ Threshold default of **0.85** is higher than the evidence-search default of 0.75
 | `purpose="blacklist_embed"` result arrives but the entry was deleted | Log error, drop the message. Reference is orphaned — could leave a zombie row but `ON DELETE CASCADE` prevents that at the DB level. |
 | Qdrant upsert fails | Log error, do NOT mark reference as PROCESSED. Retry on consumer's next XREADGROUP delivery (existing DLQ mechanism). |
 | DB upsert fails after Qdrant succeeded | Qdrant has the orphan point; DB has no record. Reconciliation job (future, out of scope) would detect and clean up. Alternative: store DB row first, then Qdrant, rollback DB on Qdrant failure. Chose Qdrant-first because the point_id is the join key — simpler to reason about. |
+| GPU-side CLIP inference fails (`compute.error` envelope) | Consumer can't branch on `purpose` (upstream omits it on errors). Dispatch by looking up `entity_id` in `blacklist_image_references` first, fall through to `search_requests`. On match: set `BlacklistReferenceStatus.ERROR`. See §"Error routing" above. |
 | Reverse search job fails mid-run | Partial matches published, rest lost. Re-triggerable via `POST /api/v1/blacklist/entries/{id}/backfill` (Phase 06). |
 | Backend restart mid-reverse-search | Job lost. Same re-trigger mechanism. |
 
