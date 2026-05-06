@@ -11,6 +11,40 @@
 
 ---
 
+## 0. Current status *(living — updated as the negotiation progresses)*
+
+| Ask | State | Notes |
+|---|---|---|
+| §2 Phase 01 — evidence pass-through | **Stop-gap shipped on backend; final taxonomy still pending platform team** | Compute shipped `entities: list[int]` from `t_configurations.entities` (commit `fb28d8e`). Backend now translates `entities[]` → `category` on its side using a hardcoded YOLO/COCO-80 map at [src/infrastructure/entity_taxonomy.py](../../src/infrastructure/entity_taxonomy.py). New `GET /api/v1/search/categories` endpoint exposes `[{"id": X, "label": "..."}]` to the frontend dropdown. Option A vs B (where the authoritative taxonomy lives long-term) **deferred to product/UX** — see semantic distinction below. |
+| §3 Phase 04 — search pass-through | **Shipped by compute (commit `639d753`)** | `purpose` + `blacklist_entry_id` echo on `search:results` with `event_type` unchanged. `compute.error` **deliberately does not carry** these fields — backend must route blacklist-embed failures by `entity_id` lookup. See [../image-blacklist/04_EMBEDDING_FLOW.md](../image-blacklist/04_EMBEDDING_FLOW.md) §Error routing. |
+
+**Stop-gap on §2 (shipped 2026-04-20):**
+
+Frontend was blocked on having *some* category data flowing. We now:
+
+1. Translate `entities: list[int]` → DB `category TEXT` as compact JSON (`"[2,5]"`) for distinct-value queries.
+2. Translate `entities` → Qdrant payload `category: list[str]` (`["2", "5"]`) for `MatchAny` filtering.
+3. Resolve ids to labels via a small hardcoded map ([entity_taxonomy.py](../../src/infrastructure/entity_taxonomy.py)) — currently 6 known classes + `"unk"` fallback.
+4. Expose `GET /api/v1/search/categories` so the frontend doesn't hardcode the map on its side.
+
+**Why this is still a stop-gap, not a final answer:**
+
+The compute team flagged a semantic distinction we initially missed:
+
+- **Option A (config-based):** `entities` reflects what a tenant is *configured* to monitor. A vehicle-monitoring tenant gets `category=["car"]` on every evidence regardless of content.
+- **Option B (content-based):** Some other field (e.g. `classes_detected` from the YOLO detector) reflects what the detector *actually saw*. A vehicle-monitoring tenant only gets `category=["car"]` if a car was visible in the frame.
+
+For a user-facing search filter ("show me images with vehicles"), Option B semantics is almost certainly what users expect. But that requires ETL to forward `classes_detected` and a separate negotiation with that team.
+
+**Until product/UX resolves which semantic to ship long-term**, the stop-gap above gives us a working dropdown today using `entities` (Option A semantics, with stop-gap labels). The endpoint and filter contracts won't change when we eventually swap source-of-truth — only the consumer's translation logic changes.
+
+Next actions:
+- **Product/UX:** confirm whether category search should mean "configured to watch X" or "actually saw X".
+- **Platform team (long-term):** expose `t_configurations.entities` as a readable endpoint or shared DB view so we can replace the hardcoded label map with a live cache.
+- **ETL team (only if Option B wins):** add `classes_detected: list[str]` to the `evidence:embed` publish payload.
+
+---
+
 ## 1. Context
 
 We've landed two features that depend on fields moving through your service unchanged:
@@ -28,9 +62,42 @@ No behavior changes to the search/embed logic itself. No new streams. No new env
 
 ---
 
-## 2. Phase 01 addition — `category` pass-through *(retroactive)*
+## 2. Phase 01 addition — evidence category pass-through *(stop-gap shipped; long-term semantic still pending)*
 
-### What we need
+### Negotiation history
+
+Compute shipped `entities: list[int]` forwarded byte-identical from `t_configurations.entities` (commit `fb28d8e`, [evidence_handler.py:80-83, :145](../../../image-embedding-compute/src/streams/evidence_handler.py)). Compute's reasoning: taxonomy ownership sits upstream, not in compute. Backend agreed with the principle but flagged a shape mismatch — our pipeline expected a human-readable `category: str`, and opaque `list[int]` IDs would leak taxonomy identifiers into a user-facing search API.
+
+Compute's reply (`BACKEND_INTEGRATION.md`) surfaced a deeper issue we initially missed: **Option A (config-based) and Option B (content-based) return different data**. A tenant configured for `entities=[person, vehicle]` whose detector only saw a person:
+- Option A → tagged `category=["person", "vehicle"]` (config inheritance)
+- Option B → tagged `category=["person"]` (what was actually seen)
+
+For a user-facing search filter, Option B semantics is almost certainly what users expect — but Option B requires an ETL change we haven't negotiated yet.
+
+### Stop-gap shipped on backend (2026-04-20)
+
+Rather than block frontend on the semantic decision, we shipped a working dropdown today using `entities` (Option A semantics). The contracts are stable across an eventual swap to Option B — only the consumer's translation logic changes.
+
+**What landed on backend:**
+
+| File | Change |
+|---|---|
+| [src/infrastructure/entity_taxonomy.py](../../src/infrastructure/entity_taxonomy.py) | New — hardcoded YOLO/COCO-80 label map (6 known classes + `"unk"` fallback). Documented as STOPGAP in the module docstring. |
+| [src/streams/embedding_results_consumer.py](../../src/streams/embedding_results_consumer.py) | Reads `payload["entities"]`, sorts + dedupes, writes DB `category TEXT` as compact JSON (`"[2,5]"`) and Qdrant payload `category: list[str]` (`["2", "5"]`). |
+| [src/main.py](../../src/main.py) | New `GET /api/v1/search/categories` endpoint — returns `[{"id": X, "label": "..."}]` for the frontend dropdown, multi-tenant scoped via `X-User-Id`. |
+
+**Filter UX:** frontend renders the labels from the categories endpoint, sends the stringified id (e.g. `category=["2"]`) on `POST /api/v1/search`. Qdrant `MatchAny` against the keyword[] payload matches points whose category list contains any of the requested ids.
+
+### What still needs to happen
+
+| Party | Action | When |
+|---|---|---|
+| Product / UX | Confirm: does "search by category=vehicle" mean "configured to watch vehicles" (Option A) or "vehicle visible in image" (Option B)? Implementation pivot is on the consumer side only. | Before peak of feature usage; not blocking initial rollout. |
+| Platform team | Expose `t_configurations.entities` as a readable endpoint or shared DB view. Replaces the hardcoded `entity_taxonomy.py` map with a runtime-cached lookup. | Anytime — the stop-gap holds in the meantime. |
+| ETL team (Option B only) | Add `classes_detected: list[str]` to the `evidence:embed` publish payload. Compute will pass it through; backend swaps source field. | Conditional on Option B winning. |
+| Compute team | **Nothing more required.** `fb28d8e` is the final shape regardless of which option wins. | — |
+
+### What we originally asked for *(still the target shape after either resolution lands)*
 
 On the `evidence:embed` → `embeddings:results` path (and the alternate `embeddings:results:weapon_analysis` routing), recognize and forward an optional top-level `category` string.
 
@@ -73,7 +140,11 @@ SELECT COUNT(*) FROM embedding_requests WHERE category IS NOT NULL;
 
 ---
 
-## 3. Phase 04 addition — `purpose` + `blacklist_entry_id` on `evidence:search` *(new)*
+## 3. Phase 04 addition — `purpose` + `blacklist_entry_id` on `evidence:search` *(shipped)*
+
+**Status:** shipped by compute on 2026-04-20 as commit `639d753`. [search_handler.py:63-72, :92-94](../../../image-embedding-compute/src/streams/search_handler.py) now reads + echoes both fields with `event_type` unchanged. Legacy callers unchanged. Backend Phase 04 unblocked for end-to-end verification.
+
+**One gotcha — `compute.error` does NOT carry `purpose` / `blacklist_entry_id`.** Compute's reasoning: the failure is structurally identical regardless of intent, so they chose not to echo the routing fields on the error envelope. That's defensible from their side, but it means the backend consumer must route blacklist-embed failures by `entity_id` alone — looking up whether the id exists in `blacklist_image_references` vs `search_requests`. Noted in [../image-blacklist/04_EMBEDDING_FLOW.md](../image-blacklist/04_EMBEDDING_FLOW.md) §Error routing for the implementation.
 
 ### What we need
 
@@ -155,11 +226,11 @@ We considered adding a separate `reference_id` field to avoid the overloading, b
 
 ## 4. What we need from you
 
-| # | Task | File | Effort |
+| # | Task | File | Status |
 |---|---|---|---|
-| 1 | Add `category` to the explicit pass-through list | [`src/streams/evidence_handler.py`](../../../image-embedding-compute/src/streams/evidence_handler.py) | ~2 lines |
-| 2 | Add `purpose` + `blacklist_entry_id` to the read + echo list | [`src/streams/search_handler.py`](../../../image-embedding-compute/src/streams/search_handler.py) | ~4 lines |
-| 3 | Update your CONTRACT.md §2.2 (input), §2.6 (output), §3 (search flow) | `docs/CONTRACT.md` | ~3 table rows + notes |
+| 1 | ~~Add `category` to the explicit pass-through list~~ → superseded: compute shipped `entities: list[int]` in `fb28d8e`. Resolution chosen: platform exposes the taxonomy table; backend does the translation. **No further action on compute.** | [`src/streams/evidence_handler.py`](../../../image-embedding-compute/src/streams/evidence_handler.py) | **Done on compute side** |
+| 2 | Add `purpose` + `blacklist_entry_id` to the read + echo list | [`src/streams/search_handler.py`](../../../image-embedding-compute/src/streams/search_handler.py) | **Shipped — commit `639d753`** |
+| 3 | Update your CONTRACT.md §2.2 (input), §2.6 (output), §3 (search flow) | `docs/CONTRACT.md` | Done for both §2 (`fb28d8e`) and §3 (`639d753`) |
 | 4 | One release / deploy | — | your call |
 
 That's it. No migrations, no new streams, no new consumer groups.
@@ -176,7 +247,8 @@ So you know what's waiting for you.
 |---|---|---|
 | `embedding_requests.category` column + B-tree index | Live (migration `d4a9b7c3e5f8`) | — |
 | Qdrant payload index on `category` | Live (idempotent on startup) | — |
-| `embedding_results_consumer` reading `payload["category"]` | Live | **Yes** — field never arrives because you drop it |
+| `embedding_results_consumer` translating `payload["entities"]` → `category` | Live (stop-gap) | **No more compute work needed.** Backend reads `entities`, stores DB JSON-string + Qdrant keyword list, exposes labels via `GET /api/v1/search/categories`. Hardcoded YOLO map at [entity_taxonomy.py](../../src/infrastructure/entity_taxonomy.py) — replace with platform-fed cache when available. |
+| `GET /api/v1/search/categories` endpoint | Live | Returns `[{"id": X, "label": "..."}]` for the frontend dropdown. Multi-tenant scoped. |
 | `SearchCreateRequest.category` field on `POST /api/v1/search` | Live | No (works within our own data) |
 | Filter allow-list in search_results_consumer + recalc | Live | — |
 | Blacklist 3-table SQL spine | Live (migration `e7f2c9a1b3d6`) | — |
@@ -190,9 +262,9 @@ So you know what's waiting for you.
 
 ## 6. Open questions — please confirm
 
-1. **Timeline for the `category` pass-through fix.** It's the smallest change and has the highest ROI because our side already ships. Any reason not to include it in your next release?
+1. ~~Taxonomy bridge for `entities`.~~ **Resolved 2026-04-20 — Option 1 (platform taxonomy endpoint).** Next step is a platform-team ask, not a compute ask. Compute: nothing more needed here.
 
-2. **Timeline for the `purpose` echo.** Less urgent because we can't verify end-to-end until our Phase 04 ships either, but blocking our Phase 04 testing means our Phase 05/06/07 slip. Can you commit to a target date?
+2. ~~Timeline for the `purpose` echo.~~ **Resolved — shipped as `639d753`.** Backend can proceed with Phase 04 verification against the updated compute build.
 
 3. **Dead-letter behavior for blacklist-embed failures.** Today if CLIP inference fails for a regular search, you publish a `compute.error` envelope to `search:results`. Same path for blacklist embeds? We'd expect yes — the failure is identical from your perspective. We'll handle it on our side by marking the `BlacklistImageReference.status = 4 (ERROR)` and logging.
 
@@ -204,14 +276,23 @@ So you know what's waiting for you.
 
 After your release, we can jointly verify with two quick probes:
 
-### Thing 1 — `category` pass-through
+### Thing 1 — evidence pass-through
+
+As of 2026-04-20, compute forwards `entities: list[int]` (not `category: str`). Probe shape depends on which §2 resolution lands:
 
 ```bash
-# 1. Have the ETL team send ONE evidence with category="test-vehicle"
-# 2. Wait for ingest (~5s)
-# 3. Query our DB
-psql -h <our-db> -c "SELECT category FROM embedding_requests WHERE category='test-vehicle' LIMIT 1;"
-# Expected: "test-vehicle" — category flowed through.
+# If resolution (a) — taxonomy map endpoint — ETL tags an evidence with entity id(s), we translate on read.
+# Probe the raw forwarded field first:
+rcli XREVRANGE embeddings:results + - COUNT 3 | grep -A1 entities
+# Expected: "entities": [2]  (or similar list of ints) appears in the payload.
+
+# Then, once our ingest translates via the cached map, query our DB for the resolved label:
+psql -h <our-db> -c "SELECT category FROM embedding_requests WHERE category IS NOT NULL LIMIT 5;"
+# Expected: human-readable labels, not ints.
+
+# If resolution (b) — ETL forwards classes_detected — the probe is simpler:
+rcli XREVRANGE embeddings:results + - COUNT 3 | grep -A1 classes_detected
+# Expected: "classes_detected": ["vehicle"] (or similar list of strings).
 ```
 
 ### Thing 2 — `purpose` echo

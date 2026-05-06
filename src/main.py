@@ -5,6 +5,7 @@ Stores directly in Qdrant + PostgreSQL — no ARQ queue for the happy path.
 """
 
 import asyncio
+import json
 import logging
 import sys
 from datetime import datetime
@@ -28,6 +29,7 @@ from src.application.helpers.weapon_filters import build_weapon_filter_condition
 from src.db.repositories import EmbeddingRequestRepository, SearchRequestRepository
 from src.infrastructure.config import get_settings
 from src.infrastructure.database import engine, get_session
+from src.infrastructure.entity_taxonomy import resolve_entity_label
 from src.infrastructure.vector_db.qdrant_repository import QdrantVectorRepository
 from src.services.safety_nets import (
     cleanup_old_requests,
@@ -341,6 +343,70 @@ async def create_search(
         "status": "pending",
         "message": f"Search submitted, check status at /api/v1/search/{search_id}",
     }
+
+
+@app.get("/api/v1/search/categories")
+async def list_search_categories(
+    ctx: UserContext = Depends(get_user_context),
+):
+    """Distinct entity-id categories visible to this tenant, with human labels.
+
+    Each evidence is tagged by upstream ETL with `entities: list[int]` (ids
+    drawn from `t_configurations.entities`). The consumer stores the sorted-
+    deduped id list as a JSON string in `embedding_requests.category` (e.g.
+    `"[2,5]"`). This endpoint flattens those lists across the tenant's data
+    into a unique set of ids, resolves each to a human label, and returns
+    them sorted by id.
+
+    Frontend uses the result to populate a search-filter dropdown. Filter
+    requests on POST /api/v1/search send the stringified id (e.g. `"2"`),
+    which Qdrant matches against the `category` payload list via MatchAny.
+
+    Label resolution is a stop-gap — see src/infrastructure/entity_taxonomy.py
+    and docs/requirements/IMAGE_COMPUTE_STREAMS.md §2 for the migration path
+    to a runtime-cached taxonomy from the platform team.
+    """
+    # Admin/root see all tenants; everyone else is scoped to their owner_id.
+    is_admin = ctx.role in ("admin", "root", "dev")
+    scope_user_id = None if is_admin else ctx.owner_id
+
+    if not is_admin and not scope_user_id:
+        raise HTTPException(status_code=401, detail="Missing X-User-Id")
+
+    async with get_session() as session:
+        if scope_user_id:
+            result = await session.execute(
+                text(
+                    "SELECT DISTINCT category FROM embedding_requests "
+                    "WHERE category IS NOT NULL AND user_id = :uid"
+                ),
+                {"uid": scope_user_id},
+            )
+        else:
+            result = await session.execute(
+                text("SELECT DISTINCT category FROM embedding_requests WHERE category IS NOT NULL")
+            )
+        rows = result.scalars().all()
+
+    # Each row is a JSON-encoded list like "[2,5]". Defensive parse — bad
+    # rows (legacy data, hand-edited values) are skipped rather than 500'd.
+    flat_ids: set[int] = set()
+    for raw in rows:
+        try:
+            ids = json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(ids, list):
+            continue
+        for entity_id in ids:
+            if isinstance(entity_id, int):
+                flat_ids.add(entity_id)
+
+    categories = [
+        {"id": entity_id, "label": resolve_entity_label(entity_id)}
+        for entity_id in sorted(flat_ids)
+    ]
+    return {"categories": categories}
 
 
 @app.get("/api/v1/search/{search_id}")

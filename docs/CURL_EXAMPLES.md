@@ -120,12 +120,33 @@ curl -X POST http://localhost:8001/api/v1/search \
   }'
 ```
 
-### Search narrowed by category
+### List available categories (for the frontend filter dropdown)
 
-Category is a free-form string assigned by the ETL producer (e.g. `"vehicle"`, `"scene"`). Pass a scalar for exact match or a list for `MatchAny` across multiple categories. See [../image-blacklist/01_CATEGORY.md](../image-blacklist/01_CATEGORY.md).
+Categories are upstream taxonomy entity ids (sourced from `t_configurations.entities`). The endpoint returns the distinct ids that exist for the tenant plus human-readable labels — frontend uses this to populate the dropdown rather than hardcoding ids on its side.
 
 ```bash
-# Single category — only vehicle evidence
+curl http://localhost:8001/api/v1/search/categories \
+  -H "X-User-Id: 550e8400-e29b-41d4-a716-446655440000" \
+  -H "X-User-Role: user"
+
+# Response:
+# {
+#   "categories": [
+#     { "id": 0, "label": "person" },
+#     { "id": 2, "label": "car" },
+#     { "id": 5, "label": "bus" }
+#   ]
+# }
+```
+
+Empty result (`{"categories": []}`) is normal until evidence with non-null `entities` has been ingested. See [API_REFERENCE.md](API_REFERENCE.md#get-apiv1searchcategories--list-available-categories).
+
+### Search narrowed by category
+
+Category values are stringified entity ids from the upstream taxonomy (e.g. `"2"` for car). Pass a scalar for exact match or a list for `MatchAny` across multiple ids. The frontend should call `GET /api/v1/search/categories` first and let the user pick from the labeled dropdown — the chosen item's `id` (as a string) goes into the `category` field on this request. See [../requirements/IMAGE_COMPUTE_STREAMS.md](../requirements/IMAGE_COMPUTE_STREAMS.md) §2 for the upstream contract.
+
+```bash
+# Single id — only car evidence (id 2)
 curl -X POST http://localhost:8001/api/v1/search \
   -H "X-User-Id: 550e8400-e29b-41d4-a716-446655440000" \
   -H "X-User-Role: user" \
@@ -133,10 +154,10 @@ curl -X POST http://localhost:8001/api/v1/search \
   -d '{
     "image_url": "https://storage.example.com/query.jpg",
     "threshold": 0.75,
-    "category": "vehicle"
+    "category": "2"
   }'
 
-# Multiple categories — matches from any of the listed categories
+# Multiple ids — matches from any (cars id=2 OR buses id=5)
 curl -X POST http://localhost:8001/api/v1/search \
   -H "X-User-Id: 550e8400-e29b-41d4-a716-446655440000" \
   -H "X-User-Role: user" \
@@ -144,10 +165,10 @@ curl -X POST http://localhost:8001/api/v1/search \
   -d '{
     "image_url": "https://storage.example.com/query.jpg",
     "threshold": 0.75,
-    "category": ["vehicle", "scene"]
+    "category": ["2", "5"]
   }'
 
-# Category combined with weapons filter — weapon-bearing vehicles only
+# Category combined with weapons filter — weapon-bearing cars only
 curl -X POST http://localhost:8001/api/v1/search \
   -H "X-User-Id: 550e8400-e29b-41d4-a716-446655440000" \
   -H "X-User-Role: user" \
@@ -156,7 +177,7 @@ curl -X POST http://localhost:8001/api/v1/search \
     "image_url": "https://storage.example.com/query.jpg",
     "threshold": 0.75,
     "weapons_filter": "only",
-    "category": "vehicle"
+    "category": "2"
   }'
 ```
 

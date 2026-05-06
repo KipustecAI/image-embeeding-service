@@ -16,6 +16,7 @@ from uuid import uuid4
 
 import numpy as np
 
+from ..application.helpers.category_serializer import entities_to_category
 from ..application.helpers.weapon_report_events import (
     WEAPONS_DETECTED_EVENT_TYPE,
     build_weapons_detected_event,
@@ -111,8 +112,13 @@ async def _process_embeddings_result(payload: dict, message_id: str):
     device_id = payload.get("device_id")
     app_id = payload.get("app_id")
     infraction_code = payload.get("infraction_code")
-    category = payload.get("category")  # Optional, see docs/image-blacklist/01_CATEGORY.md
     embeddings_data = payload.get("embeddings", [])
+
+    # Category — translated from upstream `entities: list[int]` (config-driven
+    # taxonomy ids forwarded by ETL via image-embedding-compute, commit
+    # `fb28d8e`). See category_serializer.py for the two output shapes and
+    # docs/requirements/IMAGE_COMPUTE_STREAMS.md §2 for the negotiation trail.
+    category_db, category_qdrant = entities_to_category(payload.get("entities"))
 
     # Optional weapons enrichment — see docs/weapons/03_CONSUMER.md
     weapon_analysis = payload.get("weapon_analysis") or {}
@@ -195,7 +201,7 @@ async def _process_embeddings_result(payload: dict, message_id: str):
                     "user_id": user_id,
                     "device_id": device_id,
                     "app_id": app_id,
-                    "category": category,
+                    "category": category_qdrant,
                     "weapon_analyzed": weapon_analyzed,
                     "has_weapon": per_image_has_weapon,
                     "weapon_classes": per_image_classes,
@@ -246,7 +252,7 @@ async def _process_embeddings_result(payload: dict, message_id: str):
                 weapon_max_confidence=weapon_summary.get("max_confidence"),
                 weapon_summary=weapon_summary or None,
                 weapon_analysis_error=weapon_error_message,
-                category=category,
+                category=category_db,
             )
 
             # Link DB records to the request
