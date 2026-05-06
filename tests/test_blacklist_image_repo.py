@@ -117,7 +117,7 @@ async def test_list_active_only_by_default(session):
     default_list = await repo.list_entries(user_id=uid)
     assert {e.id for e in default_list} == {active.id}
 
-    with_inactive = await repo.list_entries(user_id=uid, active_only=False)
+    with_inactive = await repo.list_entries(user_id=uid, active=None)
     assert {e.id for e in with_inactive} == {active.id, inactive.id}
 
 

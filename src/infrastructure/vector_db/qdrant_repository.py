@@ -342,6 +342,37 @@ class QdrantVectorRepository(VectorRepository):
             logger.error(f"Error deleting embedding {embedding_id}: {e}")
             return False
 
+    async def delete_points(self, point_ids: list[str]) -> bool:
+        """Bulk-delete points from the evidence_embeddings collection.
+
+        Used by the blacklist CRUD path when an entry or reference is
+        removed — the caller pulls the qdrant_point_ids from SQL first,
+        then asks us to clean up Qdrant. Empty input is a fast no-op
+        (callers don't need to guard).
+
+        Returns ``True`` on a successful delete (or empty input),
+        ``False`` on any failure. The caller's policy when False:
+        leave the SQL row in place so an admin can retry — better an
+        orphaned blacklist entry in SQL than orphaned Qdrant points
+        that keep silently matching against evidence.
+        """
+        if not point_ids:
+            return True
+        try:
+            result = self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=point_ids,
+                wait=True,
+            )
+            if result.status == UpdateStatus.COMPLETED:
+                logger.info(f"Deleted {len(point_ids)} points from {self.collection_name}")
+                return True
+            logger.error(f"Failed to delete {len(point_ids)} points: {result}")
+            return False
+        except Exception as e:
+            logger.error(f"Error deleting {len(point_ids)} points: {e}")
+            return False
+
     async def store_raw_point(self, point_id: str, vector: list, payload: dict) -> bool:
         """Upsert a raw point into the evidence_embeddings collection.
 

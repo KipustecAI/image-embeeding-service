@@ -64,30 +64,60 @@ class BlacklistImageRepository:
         self,
         user_id: str | None = None,
         *,
-        active_only: bool = True,
+        active: bool | None = True,
         category: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[BlacklistImageEntry]:
         """List entries, most-recent first.
 
-        Pass `user_id=None` only from admin paths. For regular users, the
-        caller (router/use case) must pin `user_id` to the tenant — the
-        repository doesn't enforce multi-tenant isolation on its own.
+        ``active``: ``True`` = only active (default); ``False`` = only
+        inactive; ``None`` = both. Pass ``user_id=None`` only from admin
+        paths — the repository doesn't enforce multi-tenant isolation,
+        the caller (router/use case) must pin ``user_id`` to the tenant.
+        """
+        query = self._entries_query(user_id=user_id, active=active, category=category)
+        query = query.order_by(BlacklistImageEntry.created_at.desc()).limit(limit).offset(offset)
+        result = await self.session.execute(query)
+        return list(result.scalars().all())
+
+    async def count_entries(
+        self,
+        user_id: str | None = None,
+        *,
+        active: bool | None = True,
+        category: str | None = None,
+    ) -> int:
+        """Total matching entries — paired with ``list_entries`` for pagination."""
+        base = self._entries_query(user_id=user_id, active=active, category=category)
+        result = await self.session.execute(select(func.count()).select_from(base.subquery()))
+        return int(result.scalar() or 0)
+
+    def _entries_query(
+        self,
+        *,
+        user_id: str | None,
+        active: bool | None,
+        category: str | None,
+    ):
+        """Shared filter clause for list_entries and count_entries.
+
+        Kept as a private helper so the two paths can't drift on what
+        "active" or "category=foo" means.
         """
         query = select(BlacklistImageEntry)
         conditions = []
         if user_id is not None:
             conditions.append(BlacklistImageEntry.user_id == user_id)
-        if active_only:
+        if active is True:
             conditions.append(BlacklistImageEntry.active.is_(True))
+        elif active is False:
+            conditions.append(BlacklistImageEntry.active.is_(False))
         if category is not None:
             conditions.append(BlacklistImageEntry.category == category)
         if conditions:
             query = query.where(and_(*conditions))
-        query = query.order_by(BlacklistImageEntry.created_at.desc()).limit(limit).offset(offset)
-        result = await self.session.execute(query)
-        return list(result.scalars().all())
+        return query
 
     async def count_active_by_user(self, user_id: str) -> int:
         """Cheap check — is it worth running inline blacklist-match queries?
@@ -240,6 +270,33 @@ class BlacklistImageRepository:
             .order_by(BlacklistImageEmbedding.created_at.asc())
         )
         return list(result.scalars().all())
+
+    async def count_references_by_entry_ids(self, entry_ids: list[UUID]) -> dict[UUID, int]:
+        """Bulk reference-count by entry id. Empty input returns ``{}``.
+
+        The list endpoint calls this once per page rather than firing
+        ``list_references`` per entry — keeps the response O(1) queries
+        instead of O(N).
+        """
+        if not entry_ids:
+            return {}
+        result = await self.session.execute(
+            select(BlacklistImageReference.entry_id, func.count())
+            .where(BlacklistImageReference.entry_id.in_(entry_ids))
+            .group_by(BlacklistImageReference.entry_id)
+        )
+        return {row[0]: int(row[1]) for row in result.all()}
+
+    async def count_embeddings_by_entry_ids(self, entry_ids: list[UUID]) -> dict[UUID, int]:
+        """Bulk embedding-count by entry id. Empty input returns ``{}``."""
+        if not entry_ids:
+            return {}
+        result = await self.session.execute(
+            select(BlacklistImageEmbedding.entry_id, func.count())
+            .where(BlacklistImageEmbedding.entry_id.in_(entry_ids))
+            .group_by(BlacklistImageEmbedding.entry_id)
+        )
+        return {row[0]: int(row[1]) for row in result.all()}
 
     async def get_active_qdrant_point_ids(self, user_id: str) -> list[str]:
         """All qdrant_point_ids for a user's active+indexed blacklist entries.

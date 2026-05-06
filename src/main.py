@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from src.api.dependencies import UserContext, get_user_context
+from src.api.v1.routers import blacklist_image as blacklist_image_router
 from src.application.helpers.source_type_filter import build_evidence_only_filter
 from src.application.helpers.weapon_filters import build_weapon_filter_conditions
 from src.db.repositories import EmbeddingRequestRepository, SearchRequestRepository
@@ -118,6 +119,13 @@ async def lifespan(app: FastAPI):
     # to the report-generation stream — see
     # docs/requirements/REPORT_GENERATION_STREAMS.md §3.
     set_blacklist_match_stream_producer(stream_producer)
+    # The blacklist CRUD router (Phase 06) needs Qdrant for cleanup on
+    # delete + the StreamProducer to publish embed requests on reference
+    # add. Wire after both singletons exist.
+    blacklist_image_router.set_blacklist_router_deps(
+        vector_repo=vector_repo,
+        stream_producer=stream_producer,
+    )
     logger.info("Stream producer ready")
 
     # 4. APScheduler — safety nets + periodic tasks
@@ -186,6 +194,9 @@ app = FastAPI(
     version="2.1.0",
     lifespan=lifespan,
 )
+
+# Image-blacklist CRUD (Phase 06) — see docs/BLACKLIST_API.md.
+app.include_router(blacklist_image_router.router)
 
 
 # ── Health & Stats ──
