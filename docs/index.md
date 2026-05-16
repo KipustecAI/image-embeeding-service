@@ -67,6 +67,7 @@ Optional weapons-detection enrichment on `embeddings:results`. Implementation co
 | Page | Summary | Layer |
 |---|---|---|
 | [weapons/README.md](weapons/README.md) | Phase index + decision log for the weapons feature. | wiki (current-state, with deviations) |
+| [weapons/RUNTIME.md](weapons/RUNTIME.md) | Current-state synthesis — how a weapon detection becomes a downstream report alert end-to-end. Trigger location, conditions, failure semantics, "we don't draw bboxes here" decision. | wiki |
 | [weapons/00_CONTEXT.md](weapons/00_CONTEXT.md) | Problem statement, payload sample, state-cube model. | raw (plan) |
 | [weapons/01_DATABASE.md](weapons/01_DATABASE.md) | Alembic migration + model additions for weapon analysis fields. | raw (plan) |
 | [weapons/02_QDRANT.md](weapons/02_QDRANT.md) | New payload indices + `MatchAny` fix to `search_similar`. | raw (plan) |
@@ -121,6 +122,7 @@ When you need to find something fast, this is the table to scan.
 | Contract with the upstream compute service | [requirements/IMAGE_COMPUTE_STREAMS.md](requirements/IMAGE_COMPUTE_STREAMS.md), [weapons/CONTRACT.md](weapons/CONTRACT.md) |
 | Contract with the downstream report-generation service | [requirements/REPORT_GENERATION_STREAMS.md](requirements/REPORT_GENERATION_STREAMS.md) |
 | How the weapons enrichment works | [weapons/README.md](weapons/README.md) → individual phase plans |
+| How weapon notifications get triggered + where bboxes are drawn | [weapons/RUNTIME.md](weapons/RUNTIME.md) |
 | How the image blacklist works | [image-blacklist/README.md](image-blacklist/README.md) → individual phase plans |
 | What `category` is and why values look like `"[2,5]"` | [image-blacklist/01_CATEGORY.md](image-blacklist/01_CATEGORY.md), [requirements/IMAGE_COMPUTE_STREAMS.md](requirements/IMAGE_COMPUTE_STREAMS.md) §2 |
 | Operational verification checklists | [image-blacklist/07_DOCS_AND_VERIFICATION.md](image-blacklist/07_DOCS_AND_VERIFICATION.md), [weapons/05_DOCS_AND_VERIFICATION.md](weapons/05_DOCS_AND_VERIFICATION.md) |

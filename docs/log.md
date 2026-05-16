@@ -14,6 +14,18 @@ Chronological append-only record of meaningful events in the wiki and the system
 
 ---
 
+## [2026-05-06] ingest | weapons RUNTIME synthesis page
+
+Filed [`weapons/RUNTIME.md`](weapons/RUNTIME.md) — a current-state synthesis answering "how does a weapon detection become a downstream report alert?" Surfaces three things that were previously scattered across phase plans, contracts, and the consumer code:
+
+1. The decision that **this service doesn't render bbox-annotated images** — we forward plain frames + JSON bboxes; rendering happens on the report-generation side. The only `PIL` import in the tree is in the legacy `clip_embedder.py`.
+2. The trigger location: [`src/streams/embedding_results_consumer.py`](../src/streams/embedding_results_consumer.py) around `_process_embeddings_result` after DB commit. Three conditions must all hold (`weapon_analyzed`, `report_images_with_detections` non-empty, `_stream_producer` injected).
+3. Fire-and-forget failure semantics — a Redis hiccup logs but doesn't block ingest. Receiver-side dedup catches single misses gracefully.
+
+Cross-linked from [index.md](index.md) (entry + quick-lookup row) and from [new_arq_v2/03_BACKEND_SERVICE.md](new_arq_v2/03_BACKEND_SERVICE.md) (via the existing report-event publishing description).
+
+This page exists because the user asked the question — captured per the wiki pattern's "good answers can be filed back into the wiki as new pages" guidance, so the next person who asks the same thing finds an answer instead of re-deriving it.
+
 ## [2026-05-06] lint | code-vs-docs pass on `new_arq_v2/` architecture trio
 
 First full lint pass under the wiki pattern. Compared each architecture wiki page against current `src/` state and fixed drift.
