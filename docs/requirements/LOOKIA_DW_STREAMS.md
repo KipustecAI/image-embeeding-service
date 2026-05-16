@@ -606,8 +606,8 @@ When this doc and producer code disagree, **producer code is the truth** — DW 
 | 2 | ~~DW confirms renegotiated MAXLEN~~ | Lookia-DW | **✅ Resolved 2026-05-16** — accepted (§4.6 = 500k; §4.7 = 500k / 2M backfill) |
 | 3 | `dw_direct_load_image_embedding.py` for the 34k+265k historical seed | Lookia-DW | **In progress** — DW queued it next, ~30 min build |
 | 4 | Temporary read-only Postgres role on Neon for backfill | This service | **Pending DW request** — likely 2026-05-17 |
-| 5 | Producer implementation (~150 LoC, ~2 hours) | This service | **🟢 Unblocked — ready to start** (was blocked on #1) |
-| 6 | Negative test: assert `name` field never in `blacklist_image_entry:raw` payload | This service | Part of #5 |
+| 5 | Producer implementation (~150 LoC, ~2 hours) | This service | **✅ Shipped 2026-05-16** — commit `9790bf6` |
+| 6 | Negative test: assert `name` field never in `blacklist_image_entry:raw` payload | This service | **✅ Shipped** — `tests/test_dw_publisher.py::test_blacklist_image_entry_never_includes_raw_name` |
 | 7 | `weapon_classes[]` canonical vocabulary — escalate to image-weapons-compute team | Image-weapons-compute | Deferred (not blocking; DW will track distinct values as they appear and we can promote to enum dim later) |
 
 **DW-side parallel work in progress** (per their 2026-05-16 reply):

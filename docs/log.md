@@ -14,6 +14,29 @@ Chronological append-only record of meaningful events in the wiki and the system
 
 ---
 
+## [2026-05-16] ship | lookia-dw 7 publish hooks producer side
+
+Shipped commit `9790bf6` — the producer side of the 7 DW streams documented in [`requirements/LOOKIA_DW_STREAMS.md`](requirements/LOOKIA_DW_STREAMS.md). DW expects to verify within minutes of `git push origin main`.
+
+**New files:**
+- [`src/application/helpers/dw_hashing.py`](../src/application/helpers/dw_hashing.py) — locked `name_hash` recipe (`sha256(name.encode('utf-8')).hexdigest()[:16]`), 7 tests.
+- [`src/services/dw_publisher_service.py`](../src/services/dw_publisher_service.py) — 7 publish functions, one per stream. Each builds the contract shape, hashes PII, calls `StreamProducer.publish` with the per-stream MAXLEN. 12 tests.
+
+**Hook sites:**
+- [`src/main.py`](../src/main.py) — `image_search.created` after POST /api/v1/search commit.
+- [`src/streams/search_results_consumer.py`](../src/streams/search_results_consumer.py) — `image_search.completed` + `image_search.matched` (only when `total_matches > 0`); `image_search.failed` on both top-level except and `compute.error` paths; `blacklist_image_reference.upserted` on the reference-error fall-through.
+- [`src/streams/embedding_results_consumer.py`](../src/streams/embedding_results_consumer.py) — `image_embedding_request.created` + `.completed` back-to-back after commit (atomic INSERT; no separate TO_WORK state on our side); `.failed` on exception; one `image_embedding.upserted` per `evidence_embeddings` row.
+- [`src/application/use_cases/manage_blacklist_image.py`](../src/application/use_cases/manage_blacklist_image.py) — `blacklist_image_entry.upserted` on create/update; `blacklist_image_reference.upserted` on add; entry `.upserted` again when status flips CREATED→PROCESSING.
+- [`src/services/blacklist_embed_service.py`](../src/services/blacklist_embed_service.py) — `blacklist_image_embedding.created` on INSERT; reference `.upserted` on status→PROCESSED; entry `.upserted` on status→INDEXED.
+
+**Producer enhancement:** [`src/streams/producer.py`](../src/streams/producer.py) `publish()` gained optional `maxlen` kwarg for approximate trimming on high-cardinality streams. Existing callers (`weapons:detected`, `image:blacklist_match`) pass no maxlen and keep their current unbounded behavior. `json.dumps` now uses `default=str` so DW payloads handle `datetime` / `UUID` cleanly.
+
+**Config:** new `DW_STREAM_*` (7) and `DW_MAXLEN_*` (7) env-driven settings; defaults match the renegotiated contract. Bump `DW_MAXLEN_IMAGE_EMBEDDING=2_000_000` before any direct-load backfill push.
+
+**Test result:** 136/136 unit tests pass — the PII regression guard asserting raw `name` is never on the wire is in `tests/test_dw_publisher.py::test_blacklist_image_entry_never_includes_raw_name`. FastAPI app loads cleanly.
+
+Open items #5 + #6 in the contract → both resolved. Outstanding: #3 (DW writes their `dw_direct_load_image_embedding.py`) and #4 (we grant read-only Postgres role on Neon when they request).
+
 ## [2026-05-16] decision | lookia-dw accepted contract without edit — implementation unblocked
 
 DW agent confirmed [`LOOKIA_DW_STREAMS.md`](requirements/LOOKIA_DW_STREAMS.md) without edits. Both simplifications and the MAXLEN renegotiation accepted as proposed:

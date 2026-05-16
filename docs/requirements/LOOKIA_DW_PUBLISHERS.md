@@ -151,7 +151,7 @@ Estimate: ~150 LoC, ~2 focused hours.
 | 2 | ~~DW confirms upsized MAXLEN~~ | Lookia-DW | **✅ Accepted 2026-05-16** — 500k / 500k+2M backfill |
 | 3 | `dw_direct_load_image_embedding.py` for historical seed (34k embedding_requests + 265k evidence_embeddings) | Lookia-DW | **In progress** — queued next, ~30 min build |
 | 4 | Temporary read-only Postgres role on Neon for backfill | This service | **Pending DW request** — likely 2026-05-17 |
-| 5 | Implementation (~150 LoC, ~2 hours) | This service | **🟢 Unblocked** (was blocked on #1) |
+| 5 | Implementation (~150 LoC, ~2 hours) | This service | **✅ Shipped 2026-05-16** — commit `9790bf6` |
 | 6 | `weapon_classes` vocabulary canonical list | Image-weapons-compute team | Deferred — DW tracks distinct values dynamically; promote to enum dim later if the upstream model locks the vocabulary |
 
 **Notable DW-side state at acceptance:**
