@@ -32,6 +32,11 @@ from ..db.repositories import SearchRequestRepository
 from ..db.repositories.blacklist_image_repo import BlacklistImageRepository
 from ..infrastructure.config import get_settings
 from ..infrastructure.database import get_session
+from ..services.dw_publisher_service import (
+    publish_blacklist_image_reference,
+    publish_image_search_matches,
+    publish_image_search_request,
+)
 from .consumer import StreamConsumer
 
 logger = logging.getLogger(__name__)
@@ -151,6 +156,7 @@ async def _process_search_result(payload: dict, message_id: str):
             )
 
         # Store everything in one transaction: request + match rows
+        match_rows_for_dw: list[SearchMatch] = []
         async with get_session() as session:
             repo = SearchRequestRepository(session)
 
@@ -181,23 +187,46 @@ async def _process_search_result(payload: dict, message_id: str):
                 request.matches.clear()
                 await session.flush()
 
-            # Create SearchMatch rows for each result
+            # Create SearchMatch rows for each result, keep refs for DW publish
             for match in matches:
-                session.add(
-                    SearchMatch(
-                        search_request_id=request.id,
-                        evidence_id=str(match.evidence_id),
-                        camera_id=str(match.camera_id) if match.camera_id else None,
-                        similarity_score=match.similarity_score,
-                        image_url=match.image_url,
-                        match_metadata=match.metadata,
-                    )
+                m = SearchMatch(
+                    search_request_id=request.id,
+                    evidence_id=str(match.evidence_id),
+                    camera_id=str(match.camera_id) if match.camera_id else None,
+                    similarity_score=match.similarity_score,
+                    image_url=match.image_url,
+                    match_metadata=match.metadata,
                 )
+                session.add(m)
+                match_rows_for_dw.append(m)
+
+            # Snapshot before session closes — DW publishers run after commit.
+            await session.flush()
+            for m in match_rows_for_dw:
+                session.expunge(m)
+            session.expunge(request)
+            request_snapshot = request
+            request_user_id = request.user_id
+            request_image_url = request.image_url
 
         logger.info(f"Search {search_id}: {total_matches} matches stored (threshold={threshold})")
 
+        # ── DW publishers (fire-and-forget) ──
+        # `image_search_request.completed` lifecycle event.
+        publish_image_search_request("image_search.completed", request_snapshot)
+        # `image_search.matched` — only when total_matches > 0 per contract §4.2.
+        if total_matches > 0:
+            publish_image_search_matches(
+                search_request_id=request_snapshot.id,
+                user_id=request_user_id,
+                image_url=request_image_url,
+                total_matches=total_matches,
+                matches=match_rows_for_dw,
+            )
+
     except Exception as e:
         logger.error(f"Failed to process search {search_id}: {e}", exc_info=True)
+        failed_request = None
         async with get_session() as session:
             repo = SearchRequestRepository(session)
             request = await repo.get_by_search_id(search_id)
@@ -213,6 +242,12 @@ async def _process_search_result(payload: dict, message_id: str):
                 )
                 request.status = SearchRequestStatus.ERROR
                 request.error_message = str(e)[:500]
+            await session.flush()
+            session.expunge(request)
+            failed_request = request
+
+        if failed_request is not None:
+            publish_image_search_request("image_search.failed", failed_request)
 
 
 async def _process_blacklist_embed_result(payload: dict, message_id: str):
@@ -297,6 +332,7 @@ async def _process_compute_error(payload: dict):
         ref_uuid = None
 
     if ref_uuid is not None:
+        reference_after_error = None
         async with get_session() as session:
             bl_repo = BlacklistImageRepository(session)
             reference = await bl_repo.get_reference(ref_uuid)
@@ -306,11 +342,19 @@ async def _process_compute_error(payload: dict):
                     status=BlacklistReferenceStatus.ERROR,
                     error=f"Compute error: {error}"[:500],
                 )
+                reference_after_error = await bl_repo.get_reference(ref_uuid)
+                if reference_after_error is not None:
+                    await session.flush()
+                    session.expunge(reference_after_error)
         if reference is not None:
             logger.error("Blacklist embed compute error: ref=%s err=%s", ref_uuid, error)
+            if reference_after_error is not None:
+                # DW publish on reference status → ERROR (contract §4.4).
+                publish_blacklist_image_reference(reference_after_error)
             return
 
     # Fall through to the legacy search-request path.
+    failed_request_snapshot = None
     async with get_session() as session:
         repo = SearchRequestRepository(session)
         request = await repo.get_by_search_id(entity_id)
@@ -325,5 +369,11 @@ async def _process_compute_error(payload: dict):
             )
             request.status = SearchRequestStatus.ERROR
             request.error_message = f"Compute error: {error}"
+        await session.flush()
+        session.expunge(request)
+        failed_request_snapshot = request
 
     logger.error(f"Compute error for search {entity_id}: {error}")
+
+    if failed_request_snapshot is not None:
+        publish_image_search_request("image_search.failed", failed_request_snapshot)

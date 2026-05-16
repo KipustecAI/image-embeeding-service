@@ -95,6 +95,61 @@ class Settings(BaseSettings):
         1000, validation_alias="BLACKLIST_REVERSE_SEARCH_BATCH_SIZE"
     )
 
+    # ── lookia-dw publisher streams ──────────────────────────────────────
+    # Wire-format authority: docs/requirements/LOOKIA_DW_STREAMS.md
+    # All 7 streams publish flat-hash {event_type, payload} with PII hashing
+    # on the blacklist_image_entry stream (name → name_hash).
+    dw_stream_image_search_request: str = Field(
+        "image_search_request:raw",
+        validation_alias="DW_STREAM_IMAGE_SEARCH_REQUEST",
+    )
+    dw_stream_image_search_match: str = Field(
+        "image_search_match:raw",
+        validation_alias="DW_STREAM_IMAGE_SEARCH_MATCH",
+    )
+    dw_stream_blacklist_image_entry: str = Field(
+        "blacklist_image_entry:raw",
+        validation_alias="DW_STREAM_BLACKLIST_IMAGE_ENTRY",
+    )
+    dw_stream_blacklist_image_reference: str = Field(
+        "blacklist_image_reference:raw",
+        validation_alias="DW_STREAM_BLACKLIST_IMAGE_REFERENCE",
+    )
+    dw_stream_blacklist_image_embedding: str = Field(
+        "blacklist_image_embedding:raw",
+        validation_alias="DW_STREAM_BLACKLIST_IMAGE_EMBEDDING",
+    )
+    dw_stream_image_embedding_request: str = Field(
+        "image_embedding_request:raw",
+        validation_alias="DW_STREAM_IMAGE_EMBEDDING_REQUEST",
+    )
+    dw_stream_image_embedding: str = Field(
+        "image_embedding:raw",
+        validation_alias="DW_STREAM_IMAGE_EMBEDDING",
+    )
+    # MAXLEN per stream. Defaults from the renegotiated contract sizing —
+    # observed prod volume drove the embed streams to 500k (was 100k).
+    # Bump `DW_MAXLEN_IMAGE_EMBEDDING` to 2_000_000 before a backfill push.
+    dw_maxlen_image_search_request: int = Field(
+        10_000, validation_alias="DW_MAXLEN_IMAGE_SEARCH_REQUEST"
+    )
+    dw_maxlen_image_search_match: int = Field(
+        10_000, validation_alias="DW_MAXLEN_IMAGE_SEARCH_MATCH"
+    )
+    dw_maxlen_blacklist_image_entry: int = Field(
+        5_000, validation_alias="DW_MAXLEN_BLACKLIST_IMAGE_ENTRY"
+    )
+    dw_maxlen_blacklist_image_reference: int = Field(
+        10_000, validation_alias="DW_MAXLEN_BLACKLIST_IMAGE_REFERENCE"
+    )
+    dw_maxlen_blacklist_image_embedding: int = Field(
+        10_000, validation_alias="DW_MAXLEN_BLACKLIST_IMAGE_EMBEDDING"
+    )
+    dw_maxlen_image_embedding_request: int = Field(
+        500_000, validation_alias="DW_MAXLEN_IMAGE_EMBEDDING_REQUEST"
+    )
+    dw_maxlen_image_embedding: int = Field(500_000, validation_alias="DW_MAXLEN_IMAGE_EMBEDDING")
+
     @field_validator("environment")
     @classmethod
     def validate_environment(cls, v: str) -> str:

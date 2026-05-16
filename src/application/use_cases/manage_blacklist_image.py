@@ -27,6 +27,10 @@ from ...db.models.constants import (
 from ...db.repositories.blacklist_image_repo import BlacklistImageRepository
 from ...infrastructure.config import get_settings
 from ...infrastructure.database import get_session
+from ...services.dw_publisher_service import (
+    publish_blacklist_image_entry,
+    publish_blacklist_image_reference,
+)
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -123,7 +127,11 @@ class ManageBlacklistImageUseCase:
             # attributes after the session closes. SQLAlchemy 2.x
             # otherwise raises on attribute access post-commit.
             session.expunge(entry)
-            return entry
+
+        # Fire-and-forget publish to lookia-dw — see contract §4.3.
+        # PII-safe: publisher hashes `name` to `name_hash` before XADD.
+        publish_blacklist_image_entry(entry)
+        return entry
 
     async def list_entries(
         self,
@@ -242,6 +250,9 @@ class ManageBlacklistImageUseCase:
 
             await session.flush()
             session.expunge(entry)
+
+        # Publish the upserted state to lookia-dw (contract §4.3).
+        publish_blacklist_image_entry(entry)
         return entry
 
     async def delete_entry(
@@ -320,9 +331,25 @@ class ManageBlacklistImageUseCase:
             # Lift the entry from CREATED → PROCESSING on the first
             # reference. INDEXED / UPDATING / ERROR remain (the consumer
             # owns transitions out of those).
+            entry_status_changed = False
             if entry.status == BlacklistEntryStatus.CREATED:
                 entry.status = BlacklistEntryStatus.PROCESSING
+                entry.updated_at = datetime.utcnow()
+                entry_status_changed = True
+            await session.flush()
             session.expunge(reference)
+            if entry_status_changed:
+                session.expunge(entry)
+                entry_snapshot_for_dw = entry
+            else:
+                entry_snapshot_for_dw = None
+
+        # Publish reference.upserted on every INSERT (contract §4.4).
+        publish_blacklist_image_reference(reference)
+        # Publish entry.upserted if the status transitioned (§4.3 also
+        # fires on UPDATEs that touch any visible field — status counts).
+        if entry_snapshot_for_dw is not None:
+            publish_blacklist_image_entry(entry_snapshot_for_dw)
 
         # Fire the embed request to the GPU. ``search_id`` is overloaded
         # to carry the reference id — see docs/image-blacklist/04_EMBEDDING_FLOW.md.

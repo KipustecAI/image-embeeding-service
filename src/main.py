@@ -38,6 +38,10 @@ from src.services.blacklist_reverse_search import (
     set_reverse_search_scheduler,
     set_reverse_search_vector_repo,
 )
+from src.services.dw_publisher_service import (
+    publish_image_search_request,
+    set_dw_publisher_producer,
+)
 from src.services.safety_nets import (
     cleanup_old_requests,
     recalculate_searches,
@@ -119,6 +123,9 @@ async def lifespan(app: FastAPI):
     # to the report-generation stream — see
     # docs/requirements/REPORT_GENERATION_STREAMS.md §3.
     set_blacklist_match_stream_producer(stream_producer)
+    # …and routes the 7 lookia-dw streams — see
+    # docs/requirements/LOOKIA_DW_STREAMS.md.
+    set_dw_publisher_producer(stream_producer)
     # The blacklist CRUD router (Phase 06) needs Qdrant for cleanup on
     # delete + the StreamProducer to publish embed requests on reference
     # add. Wire after both singletons exist.
@@ -344,7 +351,7 @@ async def create_search(
     # Create DB row (status=TO_WORK)
     async with get_session() as session:
         repo = SearchRequestRepository(session)
-        await repo.create_request(
+        new_request = await repo.create_request(
             search_id=search_id,
             user_id=user_id,
             image_url=body.image_url,
@@ -352,6 +359,12 @@ async def create_search(
             max_results=body.max_results,
             metadata=metadata,
         )
+        # Snapshot so attribute access after session close doesn't lazy-load.
+        session.expunge(new_request)
+
+    # Publish image_search_request.created to lookia-dw.
+    # Fire-and-forget — see docs/requirements/LOOKIA_DW_STREAMS.md §4.1.
+    publish_image_search_request("image_search.created", new_request)
 
     # Publish to GPU compute stream
     stream_producer.publish(

@@ -29,6 +29,10 @@ from ..db.repositories.blacklist_image_repo import BlacklistImageRepository
 from ..domain.entities import ImageEmbedding
 from ..infrastructure.config import get_settings
 from ..infrastructure.database import get_session
+from ..services.dw_publisher_service import (
+    publish_image_embedding,
+    publish_image_embedding_request,
+)
 from ..services.storage_uploader import StorageUploader
 from ..services.zip_processor import ZipProcessor
 from .consumer import StreamConsumer
@@ -270,6 +274,17 @@ async def _process_embeddings_result(payload: dict, message_id: str):
             request.status = EmbeddingRequestStatus.EMBEDDED
             request.processing_completed_at = datetime.utcnow()
 
+            # Snapshot for DW publishers — see lookia-dw streams contract
+            # §4.6 and §4.7. Publishers fire after the session commits
+            # so id/created_at are stable; expunge here so attribute
+            # access doesn't lazy-load after close.
+            await session.flush()
+            session.expunge(request)
+            for record in db_records:
+                session.expunge(record)
+            request_snapshot = request
+            embedding_snapshots = list(db_records)
+
         logger.info(
             f"Stored {len(qdrant_embeddings)} vectors for evidence {evidence_id} "
             f"(input={payload.get('input_count')}, filtered={payload.get('filtered_count')}, "
@@ -280,6 +295,17 @@ async def _process_embeddings_result(payload: dict, message_id: str):
             f"trace_event={trace_event!r}, "
             f"weapon_error={weapon_error_message!r})"
         )
+
+        # ── lookia-dw publishers (fire-and-forget) ──
+        # Lifecycle: emit both `.created` and `.completed` for the
+        # request. Our state machine has no separate TO_WORK → EMBEDDED
+        # transition externally (row is committed at the terminal state),
+        # so the two events fire back-to-back. Contract §4.6.
+        publish_image_embedding_request("image_embedding_request.created", request_snapshot)
+        publish_image_embedding_request("image_embedding_request.completed", request_snapshot)
+        # One `.upserted` per evidence_embedding row (contract §4.7).
+        for rec in embedding_snapshots:
+            publish_image_embedding(rec)
 
         # Fire-and-forget: publish a weapons.detected event to the
         # report-generation service. Report generation is non-critical —
@@ -330,6 +356,7 @@ async def _process_embeddings_result(payload: dict, message_id: str):
     except Exception as e:
         logger.error(f"Failed to store embeddings for {evidence_id}: {e}", exc_info=True)
         # Create error row for tracking
+        failed_request_snapshot = None
         async with get_session() as session:
             repo = EmbeddingRequestRepository(session)
             if not await repo.check_duplicate(evidence_id):
@@ -345,6 +372,14 @@ async def _process_embeddings_result(payload: dict, message_id: str):
                 )
                 request.status = EmbeddingRequestStatus.ERROR
                 request.error_message = str(e)[:500]
+                await session.flush()
+                session.expunge(request)
+                failed_request_snapshot = request
+
+        if failed_request_snapshot is not None:
+            publish_image_embedding_request(
+                "image_embedding_request.failed", failed_request_snapshot
+            )
 
 
 async def _inline_blacklist_match(
