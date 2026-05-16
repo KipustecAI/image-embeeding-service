@@ -110,7 +110,7 @@ image-embeeding-service
                                                                                                   └─ XADD image:blacklist_match → report-generation
 ```
 
-6 streams total:
+13 streams total:
 
 | Stream | Producer | Consumer |
 |---|---|---|
@@ -120,8 +120,15 @@ image-embeeding-service
 | `search:results` | embedding-compute | image-embeeding-service |
 | `weapons:detected` | image-embeeding-service | report-generation |
 | `image:blacklist_match` | image-embeeding-service | report-generation |
+| `image_search_request:raw` | image-embeeding-service | lookia-dw |
+| `image_search_match:raw` | image-embeeding-service | lookia-dw |
+| `blacklist_image_entry:raw` | image-embeeding-service | lookia-dw |
+| `blacklist_image_reference:raw` | image-embeeding-service | lookia-dw |
+| `blacklist_image_embedding:raw` | image-embeeding-service | lookia-dw |
+| `image_embedding_request:raw` | image-embeeding-service | lookia-dw |
+| `image_embedding:raw` | image-embeeding-service | lookia-dw |
 
-Full envelope shapes: [04_STREAM_CONTRACTS.md](04_STREAM_CONTRACTS.md). Outbound contracts to report-generation: [../requirements/REPORT_GENERATION_STREAMS.md](../requirements/REPORT_GENERATION_STREAMS.md).
+Full envelope shapes: [04_STREAM_CONTRACTS.md](04_STREAM_CONTRACTS.md). Outbound contracts to report-generation: [../requirements/REPORT_GENERATION_STREAMS.md](../requirements/REPORT_GENERATION_STREAMS.md). Outbound contract to lookia-dw: [../requirements/LOOKIA_DW_STREAMS.md](../requirements/LOOKIA_DW_STREAMS.md).
 
 ## Implementation Steps
 

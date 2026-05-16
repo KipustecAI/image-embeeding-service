@@ -204,6 +204,12 @@ The backend receives the pre-computed query vector and executes the Qdrant searc
 
 **Note:** `compute.error` envelopes deliberately do **not** carry `purpose` or `blacklist_entry_id` — the failure shape is identical regardless of intent. The backend dispatches errors by looking `entity_id` up in `blacklist_image_references` first and falling through to `search_requests`. See [../image-blacklist/04_EMBEDDING_FLOW.md](../image-blacklist/04_EMBEDDING_FLOW.md) §"Error routing".
 
+## Stream: weapons:detected (Backend → report-generation) *(added 2026-04-15)*
+
+Published by the backend when a `weapon_analysis` block arrives on `embeddings:results` with at least one frame carrying detections. Consumed by the report-generation service for sub-type 1D alerts.
+
+Full DTO + trigger semantics: [`../requirements/REPORT_GENERATION_STREAMS.md`](../requirements/REPORT_GENERATION_STREAMS.md) §2. Diagnostic recipe + measured latency baseline: [`../weapons/PERFORMANCE_ANALYSIS_2026_05.md`](../weapons/PERFORMANCE_ANALYSIS_2026_05.md). Producer code: [`../../src/streams/embedding_results_consumer.py`](../../src/streams/embedding_results_consumer.py) (the publish block after the DB commit).
+
 ## Stream: image:blacklist_match (Backend → report-generation) *(added 2026-05-05)*
 
 Published by the backend whenever an evidence frame matches a blacklist reference image — either inline at ingest time or via a reverse search after a new blacklist entry is registered. Consumed by the report-generation service to produce a sub-type 1E alert report.
@@ -231,6 +237,24 @@ Published by the backend whenever an evidence frame matches a blacklist referenc
 
 The full DTO + field-by-field semantics live in [../requirements/REPORT_GENERATION_STREAMS.md §3](../requirements/REPORT_GENERATION_STREAMS.md) (the contract authority). Receiver dedups on `(evidence_id, blacklist_entry_id, blacklist_entry_version)` so a version bump (entry edit) produces fresh reports while a no-op republish does not.
 
+## Lookia-DW outbound streams *(added 2026-05-16)*
+
+Seven outbound streams feed the lookia-dw data warehouse. **Wire-format authority: [`../requirements/LOOKIA_DW_STREAMS.md`](../requirements/LOOKIA_DW_STREAMS.md) §4.x.** That doc carries the per-stream payload schemas, examples, MAXLEN, edge cases. Below is a one-line directory; don't duplicate the contract here.
+
+| Stream | Source table | Trigger | event_type values |
+|---|---|---|---|
+| `image_search_request:raw` | `search_requests` | lifecycle | `image_search.created` / `.completed` / `.failed` |
+| `image_search_match:raw` | `search_matches` | terminal `.completed` w/ `total_matches > 0` | `image_search.matched` |
+| `blacklist_image_entry:raw` | `blacklist_image_entries` | INSERT / UPDATE / status flip | `blacklist_image_entry.upserted` |
+| `blacklist_image_reference:raw` | `blacklist_image_references` | INSERT / status update | `blacklist_image_reference.upserted` |
+| `blacklist_image_embedding:raw` | `blacklist_image_embeddings` | INSERT only (immutable) | `blacklist_image_embedding.created` |
+| `image_embedding_request:raw` | `embedding_requests` | lifecycle | `image_embedding_request.created` / `.completed` / `.failed` |
+| `image_embedding:raw` | `evidence_embeddings` | INSERT (per image) | `image_embedding.upserted` |
+
+All 7 use the standard `{event_type, payload}` flat-hash envelope. PII protection: `blacklist_image_entry.name` is hashed to `name_hash` before publish — raw name never on the wire (locked by [`../../tests/test_dw_publisher.py::test_blacklist_image_entry_never_includes_raw_name`](../../tests/test_dw_publisher.py)). MAXLEN per stream is env-driven via `DW_MAXLEN_*` settings; embed streams default 500k, bump `DW_MAXLEN_IMAGE_EMBEDDING=2_000_000` before any backfill push.
+
+Producer code: [`../../src/services/dw_publisher_service.py`](../../src/services/dw_publisher_service.py). Hash helper: [`../../src/application/helpers/dw_hashing.py`](../../src/application/helpers/dw_hashing.py).
+
 ## Consumer Groups
 
 | Stream | Consumer Group | Consumed By |
@@ -241,6 +265,13 @@ The full DTO + field-by-field semantics live in [../requirements/REPORT_GENERATI
 | `search:results` | `backend-workers` | embedding-backend |
 | `weapons:detected` | (configurable on receiver side) | report-generation |
 | `image:blacklist_match` | (configurable on receiver side) | report-generation |
+| `image_search_request:raw` | (configurable on receiver side) | lookia-dw |
+| `image_search_match:raw` | (configurable on receiver side) | lookia-dw |
+| `blacklist_image_entry:raw` | (configurable on receiver side) | lookia-dw |
+| `blacklist_image_reference:raw` | (configurable on receiver side) | lookia-dw |
+| `blacklist_image_embedding:raw` | (configurable on receiver side) | lookia-dw |
+| `image_embedding_request:raw` | (configurable on receiver side) | lookia-dw |
+| `image_embedding:raw` | (configurable on receiver side) | lookia-dw |
 
 ## Dead Letter Streams
 

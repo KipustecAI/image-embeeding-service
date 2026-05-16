@@ -62,6 +62,7 @@ image-embeeding-service/
 │   │   ├── helpers/
 │   │   │   ├── blacklist_match_events.py    # build_blacklist_match_event() — image:blacklist_match DTO
 │   │   │   ├── category_serializer.py       # entities[] → category (db str + qdrant list)
+│   │   │   ├── dw_hashing.py                # name_hash() PII helper for the lookia-dw publishers
 │   │   │   ├── source_type_filter.py        # build_evidence_only_filter / build_blacklist_only_filter
 │   │   │   ├── weapon_filters.py            # all/only/exclude/analyzed_clean → Qdrant filter
 │   │   │   └── weapon_report_events.py      # build_weapons_detected_event() — weapons:detected DTO
@@ -95,6 +96,7 @@ image-embeeding-service/
 │   │   ├── blacklist_embed_service.py       # purpose=blacklist_embed → store Qdrant + DB + schedule reverse search
 │   │   ├── blacklist_match_service.py       # publish_blacklist_match() — shared inline + reverse-search publisher
 │   │   ├── blacklist_reverse_search.py      # APScheduler one-shot reverse search after new reference
+│   │   ├── dw_publisher_service.py          # 7 publish functions for the lookia-dw outbound streams
 │   │   ├── safety_nets.py                   # Stale recovery, recalculation, cleanup
 │   │   ├── storage_uploader.py              # Upload ZIP-extracted frames to storage service
 │   │   └── zip_processor.py                 # Download + extract evidence ZIPs from ETL
@@ -137,6 +139,8 @@ image-embeeding-service/
 │   ├── test_weapon_report_events.py         # Weapons event builder tests
 │   ├── test_entity_taxonomy.py              # Entity-id resolver tests
 │   ├── test_category_serializer.py          # entities → category serializer tests
+│   ├── test_dw_hashing.py                   # PII hash helper tests
+│   ├── test_dw_publisher.py                 # 7-stream payload tests + PII regression guard
 │   └── test_integration.py                  # End-to-end (needs full stack)
 ├── docker-compose.yml                       # PostgreSQL + Redis + Qdrant
 ├── Dockerfile

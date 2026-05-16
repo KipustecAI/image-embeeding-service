@@ -14,6 +14,17 @@ Chronological append-only record of meaningful events in the wiki and the system
 
 ---
 
+## [2026-05-16] lint | architecture-docs refresh after DW publisher ship
+
+Targeted lint pass on the internal arch docs to absorb the DW integration without re-deriving on the next look. Pre-existing drift on `weapons:detected` (never documented in `04_STREAM_CONTRACTS.md` after Phase 04's report-gen work) fixed at the same time.
+
+- [`new_arq_v2/04_STREAM_CONTRACTS.md`](new_arq_v2/04_STREAM_CONTRACTS.md) — added the missing `weapons:detected` section (cross-links to `REPORT_GENERATION_STREAMS.md §2` rather than duplicating). Added a new `## Lookia-DW outbound streams` section listing all 7 with event_type + trigger + source-table columns, plus a paragraph on the PII guarantee and MAXLEN env var. Consumer-groups + dead-letter tables extended to list all 7. Pattern: arch doc points at the authoritative contract docs instead of duplicating shapes.
+- [`new_arq_v2/00_OVERVIEW.md`](new_arq_v2/00_OVERVIEW.md) — stream count bumped from 6 to 13. The 7 new rows added to the topology table.
+- [`new_arq_v2/01_REPO_STRUCTURE.md`](new_arq_v2/01_REPO_STRUCTURE.md) — `dw_publisher_service.py`, `dw_hashing.py`, `test_dw_publisher.py`, `test_dw_hashing.py` added to the src/ + tests/ tree listings.
+- [`new_arq_v2/03_BACKEND_SERVICE.md`](new_arq_v2/03_BACKEND_SERVICE.md) — responsibility list grew 8 → 9 (added DW publish hooks). Lifespan section's StreamProducer injection note updated to mention the new injection site.
+
+No drift found in: `API_REFERENCE.md` (no new HTTP endpoints), `BLACKLIST_API.md`, `CURL_EXAMPLES.md`, `README.md`, `requirements/IMAGE_COMPUTE_STREAMS.md`, `requirements/REPORT_GENERATION_STREAMS.md`, `weapons/*`, `image-blacklist/*`. The DW work was pure publisher-side; no surface-area drift in those domains.
+
 ## [2026-05-16] ship | lookia-dw 7 publish hooks producer side
 
 Shipped commit `9790bf6` — the producer side of the 7 DW streams documented in [`requirements/LOOKIA_DW_STREAMS.md`](requirements/LOOKIA_DW_STREAMS.md). DW expects to verify within minutes of `git push origin main`.

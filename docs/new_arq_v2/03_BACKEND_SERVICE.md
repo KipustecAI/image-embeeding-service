@@ -13,6 +13,7 @@ Consumes computed vectors from the GPU service and:
 6. Exposes REST API (search submit/status/matches/user/categories + 8 blacklist CRUD endpoints).
 7. Runs safety nets (stale recovery, recalculation, cleanup) + on-demand reverse-search jobs for the blacklist.
 8. Publishes report events to the report-generation service: `weapons:detected` (when the producer enrichment ran) and `image:blacklist_match` (inline + reverse-search matches).
+9. Publishes 7 fat-event streams to the lookia-dw data warehouse: `image_search_request:raw`, `image_search_match:raw`, `blacklist_image_entry:raw`, `blacklist_image_reference:raw`, `blacklist_image_embedding:raw`, `image_embedding_request:raw`, `image_embedding:raw`. Wire-format authority: [`../requirements/LOOKIA_DW_STREAMS.md`](../requirements/LOOKIA_DW_STREAMS.md). PII (blacklist names) hashed before publish.
 
 ## Processing Flows
 
@@ -279,7 +280,8 @@ async def lifespan(app: FastAPI):
     # 3. Construct StorageUploader (for ZIP-extracted frame uploads)
     # 4. Construct StreamProducer; inject into embedding_results_consumer
     #    (for weapons.detected) + blacklist_match_service (for image.blacklist_match) +
-    #    blacklist router (for evidence:search publishes on reference create)
+    #    blacklist router (for evidence:search publishes on reference create) +
+    #    dw_publisher_service (for the 7 lookia-dw outbound streams)
     # 5. Start APScheduler:
     #    - recover_stale_working (every 5m)
     #    - recalculate_searches (every 1h)
