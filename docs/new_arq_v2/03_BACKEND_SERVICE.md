@@ -2,16 +2,17 @@
 
 ## Responsibility
 
-Pipeline orchestration + storage + Search API. **No CLIP model, no GPU dependency.**
+Pipeline orchestration + storage + REST API. **No CLIP model, no GPU dependency.**
 
 Consumes computed vectors from the GPU service and:
-1. Stores them directly in Qdrant (~70ms per upsert)
-2. Records metadata in PostgreSQL
-3. Executes similarity searches against Qdrant
-4. Stores individual match results in `search_matches` table
-5. Stores query vectors in `search_queries` Qdrant collection for recalculation
-6. Exposes Search API (submit, status, matches, user searches)
-7. Runs safety nets (stale recovery, recalculation, cleanup)
+1. Stores them directly in Qdrant (~70ms per upsert) — `source_type="evidence"` for ingest, `source_type="blacklist"` for blacklist references.
+2. Records metadata in PostgreSQL (evidence + blacklist tables).
+3. Executes similarity searches against Qdrant with strict `source_type="evidence"` scoping.
+4. Stores individual match results in `search_matches` table.
+5. Stores query vectors in `search_queries` Qdrant collection for GPU-free recalculation.
+6. Exposes REST API (search submit/status/matches/user/categories + 8 blacklist CRUD endpoints).
+7. Runs safety nets (stale recovery, recalculation, cleanup) + on-demand reverse-search jobs for the blacklist.
+8. Publishes report events to the report-generation service: `weapons:detected` (when the producer enrichment ran) and `image:blacklist_match` (inline + reverse-search matches).
 
 ## Processing Flows
 
@@ -35,33 +36,57 @@ embeddings:results stream
        ├─ For each embedding:
        │    ├─ Upsert vector directly to Qdrant (~70ms)
        │    │   Payload: {evidence_id, camera_id, user_id, device_id,
-       │    │             app_id, image_url: <permanent>, image_index,
-       │    │             source_type: "evidence"}
-       │    └─ Create evidence_embedding DB record
+       │    │             app_id, infraction_code, image_url: <permanent>,
+       │    │             image_index, source_type: "evidence",
+       │    │             category: [<entity ids>], weapon_analyzed,
+       │    │             has_weapon, weapon_classes}
+       │    └─ Create evidence_embedding DB record (with weapon_detections)
        ├─ Create embedding_request row with ETL metadata
-       │  (user_id, device_id, app_id, infraction_code, image_urls=[...])
+       │  (user_id, device_id, app_id, infraction_code, image_urls=[...],
+       │   category (json-stringified entity ids), weapon_* fields)
        ├─ Mark request as EMBEDDED
+       ├─ Publish weapons:detected to report-generation
+       │  (only if weapon_analysis was present in payload — fire-and-forget)
+       ├─ Inline blacklist match:
+       │    ├─ Fast-exit when user has no active blacklist entries
+       │    ├─ For each new frame, search Qdrant with source_type=blacklist
+       │    │   + user_id filter
+       │    └─ For each match, publish image:blacklist_match (trigger="inline")
        └─ XACK original message
 ```
 
-No BatchTrigger. No ARQ queue. The consumer downloads the ZIP, uploads extracted frames to storage, and writes Qdrant + PostgreSQL inline (~300-500ms total including upload, vs 5-30s with the old ARQ chain).
+No BatchTrigger. No ARQ queue. The consumer downloads the ZIP, uploads extracted frames to storage, writes Qdrant + PostgreSQL inline, and (optionally) publishes report events — all in ~300-500ms total (vs 5-30s with the old ARQ chain).
 
 ### Receive Search Results (direct storage, no ARQ)
 
 ```
 search:results stream
        │
-       │ {search_id, user_id, vector, threshold, max_results, metadata}
+       │ {search_id, user_id, vector, threshold, max_results, metadata,
+       │  purpose: "search" | "blacklist_embed", blacklist_entry_id}
        ▼
   StreamConsumer (daemon thread)
        │
-       ├─ Find existing SearchRequest (created by POST API) or create new one
-       ├─ Search Qdrant with pre-computed query vector
-       ├─ Store query vector in search_queries Qdrant collection → get point_id
-       ├─ Save qdrant_query_point_id on SearchRequest
-       ├─ Create SearchMatch rows for each result
-       ├─ Update SearchRequest → COMPLETED + similarity_status
-       └─ XACK original message
+       ├─ Dispatch by `purpose`:
+       │
+       ├─ purpose="search" (default):
+       │    ├─ Find existing SearchRequest (created by POST API) or create new
+       │    ├─ Search Qdrant with strict source_type=evidence filter
+       │    ├─ Store query vector in search_queries Qdrant collection → point_id
+       │    ├─ Save qdrant_query_point_id on SearchRequest
+       │    ├─ Create SearchMatch rows for each result
+       │    └─ Update SearchRequest → COMPLETED + similarity_status
+       │
+       └─ purpose="blacklist_embed" (Phase 04):
+            ├─ search_id is overloaded — carries BlacklistImageReference.id
+            ├─ Hand off to BlacklistEmbedService.store_blacklist_embedding():
+            │    ├─ Upsert vector to Qdrant with source_type="blacklist"
+            │    │   payload: blacklist_entry_id, blacklist_reference_id,
+            │    │             user_id, model_version, image_url, category?
+            │    ├─ Insert blacklist_image_embeddings row
+            │    ├─ Lift reference status → PROCESSED, entry → INDEXED
+            │    └─ Schedule one-shot reverse-search via APScheduler
+            └─ (XACK)
 ```
 
 ### Search API Flow
@@ -99,17 +124,41 @@ Scheduled job (every 1h) or POST /api/v1/recalculate/searches
        └─ Searches without stored vectors are skipped (pre-migration)
 ```
 
+### Reverse search (blacklist)
+
+```
+BlacklistEmbedService schedules a one-shot APScheduler job (trigger="date")
+       │
+       ▼
+_run_reverse_search(entry_id, reference_id, user_id, vector)
+       │
+       ├─ Search Qdrant with build_evidence_only_filter({"user_id": user_id})
+       ├─ Load entry + reference once (cached for the loop)
+       └─ For each match:
+            └─ publish_blacklist_match(trigger="reverse_search", …)
+                  └─ XADD image:blacklist_match → report-generation
+```
+
+If the backend restarts mid-job, the job is lost. Recovery: `POST /api/v1/blacklist/image-entries/{id}/backfill` re-fires it for every PROCESSED reference under the entry.
+
 ### Handle Compute Errors
 
 ```
-embeddings:results / search:results stream
+search:results / embeddings:results stream
        │
        │ {event_type: "compute.error", entity_id, entity_type, error}
        ▼
   StreamConsumer
        │
-       └─ Update DB row → ERROR with error message
+       └─ entity_type="evidence" → mark embedding_request as ERROR
+       └─ entity_type="search":
+              ├─ Try BlacklistImageReference lookup first (UUID PK miss is cheap)
+              │     → mark BlacklistImageReference as ERROR
+              └─ Fall through to SearchRequest path
+                    → mark SearchRequest as ERROR
 ```
+
+The fallback dispatch exists because compute deliberately omits `purpose` on error envelopes — see [../image-blacklist/04_EMBEDDING_FLOW.md](../image-blacklist/04_EMBEDDING_FLOW.md) §"Error routing".
 
 ## Stream Consumers
 
@@ -207,12 +256,16 @@ async def _process_search_result(payload, message_id):
 | GET | `/api/v1/stats` | No | Pipeline counts + Qdrant stats |
 | GET | `/api/v1/pipeline/status` | No | Full status (counts + consumer health) |
 | POST | `/api/v1/search` | Yes | Submit similarity search → 202 |
+| GET | `/api/v1/search/categories` | Yes | Distinct entity-id categories visible to the tenant + labels |
 | GET | `/api/v1/search/{search_id}` | Yes | Search status (no matches inline) |
 | GET | `/api/v1/search/{search_id}/matches` | Yes | Paginated match results |
 | GET | `/api/v1/search/user/{user_id}` | Yes | List user searches (paginated) |
 | POST | `/api/v1/recalculate/searches` | Yes | Re-search with stored query vectors |
+| (8) | `/api/v1/blacklist/image-entries/...` | Yes | Image-blacklist CRUD — see [../BLACKLIST_API.md](../BLACKLIST_API.md) |
 
 Auth = gateway headers (`X-User-Id`, `X-User-Role`). No API key.
+
+Full reference: [../API_REFERENCE.md](../API_REFERENCE.md). Blacklist surface lives in `src/api/v1/routers/blacklist_image.py`; everything else is inline in `src/main.py`.
 
 ## Lifespan (main.py)
 
@@ -221,18 +274,23 @@ Auth = gateway headers (`X-User-Id`, `X-User-Role`). No API key.
 async def lifespan(app: FastAPI):
     # 1. Verify PostgreSQL connection
     # 2. Initialize Qdrant (evidence_embeddings + search_queries collections)
-    #    Set vector_repo for both consumers and safety_nets
-    # 3. Create StreamProducer (for publishing search requests to GPU)
-    # 4. Start APScheduler:
+    #    Inject vector_repo into: embedding_results_consumer, search_results_consumer,
+    #    safety_nets, blacklist_embed_service, blacklist_reverse_search
+    # 3. Construct StorageUploader (for ZIP-extracted frame uploads)
+    # 4. Construct StreamProducer; inject into embedding_results_consumer
+    #    (for weapons.detected) + blacklist_match_service (for image.blacklist_match) +
+    #    blacklist router (for evidence:search publishes on reference create)
+    # 5. Start APScheduler:
     #    - recover_stale_working (every 5m)
     #    - recalculate_searches (every 1h)
     #    - cleanup_old_requests (every 24h)
-    # 5. Start stream consumers:
+    #    Inject the scheduler into blacklist_reverse_search (for on-demand jobs)
+    # 6. Start stream consumers:
     #    - embedding_results_consumer (embeddings:results)
     #    - search_results_consumer (search:results)
 ```
 
-No ARQ pool. No BatchTrigger. Single process handles everything.
+No ARQ pool. No BatchTrigger. Single process handles everything. Blacklist CRUD is mounted via `app.include_router(blacklist_image_router.router)` — its dependencies are wired into the router module's globals during lifespan.
 
 ## What's Not in Backend
 

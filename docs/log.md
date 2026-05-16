@@ -14,6 +14,32 @@ Chronological append-only record of meaningful events in the wiki and the system
 
 ---
 
+## [2026-05-06] lint | code-vs-docs pass on `new_arq_v2/` architecture trio
+
+First full lint pass under the wiki pattern. Compared each architecture wiki page against current `src/` state and fixed drift.
+
+**Drift found and fixed:**
+
+- [`01_REPO_STRUCTURE.md`](new_arq_v2/01_REPO_STRUCTURE.md) — rewrote the `src/` tree to add the entire `api/v1/` subpackage, `application/helpers/` (5 files), `application/use_cases/manage_blacklist_image.py`, `db/models/blacklist_image.py`, `db/repositories/blacklist_image_repo.py`, `infrastructure/entity_taxonomy.py`, three blacklist services in `services/`, `storage_uploader` + `zip_processor`, the `domain/entities/` files actually in use, the new `docs/` files (README, index, log, llmwiki, BLACKLIST_API, image-blacklist/, requirements/, weapons/), and the full test list. Migrations updated from "5" to "10". Qdrant payload-indices list expanded to all 11 active indices. DB tables list expanded to include the 3 blacklist tables. Removed the false "Legacy Code" claim that `src/application/` and `src/domain/` were unused.
+- [`00_OVERVIEW.md`](new_arq_v2/00_OVERVIEW.md) — rebuilt the architecture diagram: added `/api/v1/search/categories`, the 8 blacklist endpoints, both report-event producers, the on-demand reverse-search scheduler entry, and the 3 blacklist tables. Stream topology section now shows 6 streams (was 4) — added `weapons:detected` + `image:blacklist_match`. Added five new "Key design decisions" entries covering single Qdrant collection / `purpose` reuse / fire-and-forget publishers.
+- [`03_BACKEND_SERVICE.md`](new_arq_v2/03_BACKEND_SERVICE.md) — responsibility list expanded from 7 to 8 (added report-event publishing). Embedding-results flow now documents the `weapons.detected` publish, inline-blacklist-match step, and category/weapon fields in the Qdrant payload. Search-results flow now documents `purpose` dispatch + the `blacklist_embed` branch. New "Reverse search" subsection. Compute-error section rewritten to document the entity-id fallback dispatch. API endpoint table updated for `/search/categories` + blacklist deep-link. Lifespan section expanded with `set_blacklist_*` wiring + scheduler injection.
+
+**Cross-checks passed:**
+
+- API_REFERENCE.md endpoint table matches the live FastAPI route count (`python -c "from src.main import app; ..."` enumerated 18 service routes + auto-generated `/docs` / `/redoc` / `/openapi.json`).
+- `POST /api/v1/search` request body in API_REFERENCE.md matches `SearchCreateRequest` in `src/main.py:299`.
+- `_EVIDENCE_PAYLOAD_INDICES` in `src/infrastructure/vector_db/qdrant_repository.py` matches the indices list documented in `01_REPO_STRUCTURE.md` and `API_REFERENCE.md`.
+
+**Skipped this round (already current or low-priority):**
+
+- `requirements/IMAGE_COMPUTE_STREAMS.md` and `REPORT_GENERATION_STREAMS.md` — refreshed in the last two days, no drift.
+- `weapons/*` phase plans — raw historical, intentionally not retouched.
+- `image-blacklist/*` phase plans — raw historical, intentionally not retouched.
+- `new_arq/` (v1 architecture) — superseded, kept as raw reference.
+- `legacy/` — kept as raw reference.
+
+`docs/llmwiki.md` (the seed pattern) was tracked in this commit too — it was sitting untracked since the wiki adoption commit.
+
 ## [2026-05-06] ingest | wiki pattern adopted; docs/ scaffolding created
 
 Reorganized `docs/` to follow the [LLM Wiki](llmwiki.md) pattern. Added [README.md](README.md) (schema), [index.md](index.md) (catalog), this log. No existing files moved — wiki layer is added on top so cross-links stay intact. Classification of each existing file into wiki / raw / schema lives in the index.
