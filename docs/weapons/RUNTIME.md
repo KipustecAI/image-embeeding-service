@@ -137,9 +137,20 @@ If you need a sample annotated frame for QA without going through the full PDF p
 
 ---
 
+## Diagnosing "weapons notifications are slow"
+
+If someone reports the notification path is slow, **don't start by profiling this consumer.** Run the three-step decision tree in [PERFORMANCE_ANALYSIS_2026_05.md](PERFORMANCE_ANALYSIS_2026_05.md):
+
+1. **Coverage check** — is `weapon_analysis` even reaching us in recent payloads? (Most likely cause of "no alerts".)
+2. **Per-message latency** — measured baseline 2026-05-14: p50 = 31 ms, p99 = 54 ms. If your numbers are within 2× of those, the service is fine.
+3. **Consumer-group lag** (`XINFO GROUPS embeddings:results`) — if > 1000 messages, latency lives in Redis queue depth, not our code.
+
+That doc carries the SQL queries, the Redis cross-check script, and the May 2026 incident write-up that produced the baseline.
+
 ## Cross-references
 
 - [docs/weapons/README.md](README.md) — feature overview + phase index
+- [docs/weapons/PERFORMANCE_ANALYSIS_2026_05.md](PERFORMANCE_ANALYSIS_2026_05.md) — diagnostic recipe + measured latency baseline
 - [docs/weapons/CONTRACT.md](CONTRACT.md) — upstream producer contract
 - [docs/requirements/REPORT_GENERATION_STREAMS.md §2](../requirements/REPORT_GENERATION_STREAMS.md) — downstream contract
 - [docs/new_arq_v2/03_BACKEND_SERVICE.md](../new_arq_v2/03_BACKEND_SERVICE.md) — backend service responsibilities, including report-event publishing

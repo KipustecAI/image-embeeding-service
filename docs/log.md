@@ -14,6 +14,26 @@ Chronological append-only record of meaningful events in the wiki and the system
 
 ---
 
+## [2026-05-16] verification + incident | weapons-notification performance investigation
+
+Ops reported *"the stream input consumer for trigger the notifications is taking too much time"*. Investigation against prod (Neon Postgres + remote Redis) measured the actual latency decomposition.
+
+**Numbers (May 14, the last day weapons analysis was reaching us, n=179):**
+
+- **Per-message processing in this service: p50 = 31 ms, p99 = 54 ms, max = 66 ms.** Service is healthy.
+- Queue wait in Redis: p50 = 65,883 ms, p99 = 111,176 ms. This is the dominant component of wall-clock latency — throughput-bound, not code-bound.
+- Two weapon-positive events fired alerts end-to-end in 4.7s and 7.6s (Redis-input id → Redis-output id, confirmed independently from DB and Redis sources).
+
+**Bigger finding — the actual reason notifications are missing in May 15-16:** zero `weapon_analyzed=TRUE` rows in the last 24h (Q5 daily breakdown shows 0/2,557 on May 16, 0/5,748 on May 15, after 179/179 on May 14). The upstream producer / routing layer stopped enriching evidence with `weapon_analysis` blocks. No errors captured (`weapon_analysis_error = 0 forever`) — upstream is silently skipping rather than failing-and-reporting.
+
+**Filed as wiki:** [`docs/weapons/PERFORMANCE_ANALYSIS_2026_05.md`](weapons/PERFORMANCE_ANALYSIS_2026_05.md) — captures the decision tree, the diagnostic SQL + Redis queries, the May 2026 numbers, and the "what we definitively ruled out" list so the next on-call doesn't redo this work. Cross-linked from [`weapons/RUNTIME.md`](weapons/RUNTIME.md) under a new "Diagnosing slowness" section.
+
+**Open work surfaced (not done in this investigation):**
+
+1. **Upstream coverage gap** — needs an escalation to the routing / `image-weapons-compute` team; coverage flips between 0% and 100% across days with no error trail on our side.
+2. **Consumer throughput** — `backend-workers` consumer group on `embeddings:results` shows lag = 7,079 messages at ~6/min processing rate. Either scale the consumer horizontally or parallelize the per-frame storage uploads inside `_process_embeddings_result` (currently serial `for` loop on `storage_uploader.upload_image`).
+3. **No alerting on coverage drop** — we noticed because of a user report, not a metric. A daily `weapons_coverage_pct_24h` cron would catch this earlier.
+
 ## [2026-05-06] ingest | weapons RUNTIME synthesis page
 
 Filed [`weapons/RUNTIME.md`](weapons/RUNTIME.md) — a current-state synthesis answering "how does a weapon detection become a downstream report alert?" Surfaces three things that were previously scattered across phase plans, contracts, and the consumer code:
