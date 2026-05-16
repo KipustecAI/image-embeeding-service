@@ -56,6 +56,7 @@ Wire-level contracts with upstream / downstream services. Wiki layer — these a
 |---|---|---|
 | [requirements/IMAGE_COMPUTE_STREAMS.md](requirements/IMAGE_COMPUTE_STREAMS.md) | Field-additions ask sent to the compute team. Tracks the §2 category negotiation and §3 purpose/blacklist_entry_id echo. | wiki (negotiation-driven) |
 | [requirements/REPORT_GENERATION_STREAMS.md](requirements/REPORT_GENERATION_STREAMS.md) | Outbound contract to the report-generation team. §2 weapons:detected; §3 image:blacklist_match. **Canonical for those wire shapes.** | wiki (negotiation-driven) |
+| [requirements/LOOKIA_DW_PUBLISHERS.md](requirements/LOOKIA_DW_PUBLISHERS.md) | Inbound requirement from lookia-dw — 7 publish hooks feeding their data warehouse. Captures the negotiated enum maps, MAXLEN sizing, lifecycle simplification, and implementation plan. | wiki (negotiation-driven) |
 | [weapons/CONTRACT.md](weapons/CONTRACT.md) | Authoritative producer contract for the image-weapons-compute service (their docs, our copy for reference). | wiki (mirror) |
 
 ---
@@ -122,6 +123,7 @@ When you need to find something fast, this is the table to scan.
 | Redis stream envelope shapes | [new_arq_v2/04_STREAM_CONTRACTS.md](new_arq_v2/04_STREAM_CONTRACTS.md) |
 | Contract with the upstream compute service | [requirements/IMAGE_COMPUTE_STREAMS.md](requirements/IMAGE_COMPUTE_STREAMS.md), [weapons/CONTRACT.md](weapons/CONTRACT.md) |
 | Contract with the downstream report-generation service | [requirements/REPORT_GENERATION_STREAMS.md](requirements/REPORT_GENERATION_STREAMS.md) |
+| Contract with the downstream lookia-dw service (data warehouse) | [requirements/LOOKIA_DW_PUBLISHERS.md](requirements/LOOKIA_DW_PUBLISHERS.md) |
 | How the weapons enrichment works | [weapons/README.md](weapons/README.md) → individual phase plans |
 | How weapon notifications get triggered + where bboxes are drawn | [weapons/RUNTIME.md](weapons/RUNTIME.md) |
 | "Weapons notifications are slow" — what to check first | [weapons/PERFORMANCE_ANALYSIS_2026_05.md](weapons/PERFORMANCE_ANALYSIS_2026_05.md) |

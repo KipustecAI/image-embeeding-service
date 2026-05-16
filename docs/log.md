@@ -14,6 +14,21 @@ Chronological append-only record of meaningful events in the wiki and the system
 
 ---
 
+## [2026-05-16] ingest + decision | lookia-dw publisher requirements ingested + responded
+
+Lookia-dw published a Tier 3 ask for 7 publish hooks (~80 LoC) feeding their data warehouse — full doc at [`../../lookia-dw/docs/requirements/image-embedding-service.md`](../../../lookia-dw/docs/requirements/image-embedding-service.md). The 2 high-value streams are `image_embedding_request:raw` (weapon detection metadata) and `image_embedding:raw` (per-image embed events including `weapon_detections` JSONB).
+
+**Filed as wiki:** [`requirements/LOOKIA_DW_PUBLISHERS.md`](requirements/LOOKIA_DW_PUBLISHERS.md) — captures the negotiated state. Replied to their four asks:
+
+1. **Status enums delivered** — authoritative from [`src/db/models/constants.py`](../src/db/models/constants.py). Correction: their guess for `search_requests.similarity_status` was wrong (1=NO_MATCHES, 2=MATCHES_FOUND, not pending/computed/indexed).
+2. **Volume snapshot delivered** — embedding_requests 35,778 rows; evidence_embeddings 277,899 rows. Their planning numbers undersized us by ~6×, so we renegotiated MAXLEN: `image_embedding_request:raw` 500k (was 100k), `image_embedding:raw` 500k steady / 2M for backfill push (was 100k/500k).
+3. **`REDIS_STREAMS_DB=3` confirmed** across all envs.
+4. **No `publish_to_many` fan-out** — grep returns zero; our 4 existing `StreamProducer.publish()` call sites are independent XADDs. Their Lesson 1 hazard doesn't apply here.
+
+**Pushed back on two event types** that don't match our state machine: their `image_embedding_request.weapon_analyzed` (separate event when `weapon_analyzed` flips false→true) and the UPDATE branch of `image_embedding.upserted` (when `weapon_detections` populates). Both don't exist — the consumer writes the row atomically with all fields populated at INSERT. Proposed dropping `.weapon_analyzed` entirely and emitting `.upserted` once per row. Awaiting their confirmation before implementation.
+
+**Implementation pending DW acceptance:** ~150 LoC across a new `services/dw_publisher_service.py`, a `helpers/dw_hashing.py` for the PII-safe `name_hash`, hooks in the 5 lifecycle code paths, `DW_MAXLEN_*` env vars, and a PII regression test. Estimated 2 focused hours.
+
 ## [2026-05-16] verification + incident | weapons-notification performance investigation
 
 Ops reported *"the stream input consumer for trigger the notifications is taking too much time"*. Investigation against prod (Neon Postgres + remote Redis) measured the actual latency decomposition.

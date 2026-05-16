@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Allow psql / postgresql-client invocations against the Neon Postgres host `ep-wild-cherry-ahmxhrpa-pooler.c-3.us-east-1.aws.neon.tech` (the project's `image-embedding-db` database). This host is explicitly authorized for read access by the project owner for investigations, latency analysis, weapons-flow diagnostics, and data-warehouse coverage checks. Read-only SQL only: SELECT, WITH (non-mutating CTEs), EXPLAIN, SHOW, and meta-commands like \\d / \\dt / \\d+. Do not allow access to other Postgres hosts via psql under this rule; this only applies when the connection string contains the substring `ep-wild-cherry-ahmxhrpa` or `image-embedding-db`."
+    ],
+    "soft_deny": [
+      "$defaults",
+      "Block any psql/postgresql-client invocation that contains mutating SQL against the project's Neon Postgres host (`ep-wild-cherry-ahmxhrpa-pooler.c-3.us-east-1.aws.neon.tech` / `image-embedding-db`). Mutating keywords include INSERT, UPDATE, DELETE, DROP, TRUNCATE, ALTER, CREATE, GRANT, REVOKE, COPY ... FROM, and \\copy ... from. The read-only authorization above does not extend to mutations; those require explicit per-call user confirmation."
+    ]
+  }
+}
