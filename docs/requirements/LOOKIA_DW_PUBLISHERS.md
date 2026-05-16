@@ -4,6 +4,8 @@
 
 **Source doc (theirs, authoritative for requirements):** [`../../../lookia-dw/docs/requirements/image-embedding-service.md`](../../../lookia-dw/docs/requirements/image-embedding-service.md)
 
+**Companion (ours, authoritative for wire shape):** [`LOOKIA_DW_STREAMS.md`](LOOKIA_DW_STREAMS.md) — what the DW consumer actually builds against. This doc is the *negotiation tracker* (history, decisions, open items); the companion is the *contract* (payload schemas, examples, semantics).
+
 **Status:** **in-review → response delivered 2026-05-16.** Awaiting their confirmation on the simplified `.weapon_analyzed` event shape (see §"Lifecycle simplification") before we start implementation.
 
 ---

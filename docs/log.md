@@ -14,6 +14,30 @@ Chronological append-only record of meaningful events in the wiki and the system
 
 ---
 
+## [2026-05-16] ingest | lookia-dw authoritative wire-format contract filed
+
+Companion to the negotiation tracker — filed [`requirements/LOOKIA_DW_STREAMS.md`](requirements/LOOKIA_DW_STREAMS.md) as the authoritative wire-format contract for the 7 outbound streams. Mirrors the pattern of [`REPORT_GENERATION_STREAMS.md`](requirements/REPORT_GENERATION_STREAMS.md): per-stream payload schemas + realistic examples + MAXLEN + trigger semantics + delivery / ordering / dedup conventions + versioning policy.
+
+Pattern intent (matches the llmwiki design):
+
+- **`LOOKIA_DW_PUBLISHERS.md`** = process / negotiation tracker. Captures *how* we got here — DW's ask, our pushback, deltas, lessons. Lives in the negotiation-driven layer.
+- **`LOOKIA_DW_STREAMS.md`** = wire-format authority. Captures *what gets published* — payload shapes the DW consumer builds against. Lives in the canonical-contract layer.
+
+The two cross-reference each other (companion links). DW consumers build against the contract doc; future maintenance on either side reads the tracker for the *why*.
+
+Authored 9 sections in the new contract:
+1. Context (the producer + recovery model)
+2. Envelope format (flat hash, JSON payload, XADD example, XRANGE verification)
+3. Status enum reference (full table from `src/db/models/constants.py`)
+4. Seven per-stream sections (4.1–4.7) — each with event_type table, payload schema, realistic example, MAXLEN, edge cases. §4.6 + §4.7 flagged as Tier 3 with the lifecycle-simplification asks called out.
+5. Delivery semantics (fire-and-forget, no outbox)
+6. Dedup responsibility (DW side, per-stream key recommendations)
+7. Event ordering (within-row monotonic; cross-row none)
+8. Versioning policy (additive vs breaking + coordination matrix)
+9. Open items (7 entries, ownership tagged)
+
+Cross-linked from [`index.md`](index.md) (new wiki row + updated quick-lookup pointing at the contract for the authoritative wire shape) and from the negotiation tracker (companion link at the top).
+
 ## [2026-05-16] ingest + decision | lookia-dw publisher requirements ingested + responded
 
 Lookia-dw published a Tier 3 ask for 7 publish hooks (~80 LoC) feeding their data warehouse — full doc at [`../../lookia-dw/docs/requirements/image-embedding-service.md`](../../../lookia-dw/docs/requirements/image-embedding-service.md). The 2 high-value streams are `image_embedding_request:raw` (weapon detection metadata) and `image_embedding:raw` (per-image embed events including `weapon_detections` JSONB).
