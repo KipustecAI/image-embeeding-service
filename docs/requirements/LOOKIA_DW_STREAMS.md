@@ -2,7 +2,9 @@
 
 **Audience:** the lookia-dw team and any agent building a consumer for the streams we publish to them.
 
-**Status:** **draft — awaiting DW confirmation on the lifecycle simplification (§4.6, §4.7).** Once they accept, this becomes the wire-format authority. Producer-side implementation tracking lives in [`LOOKIA_DW_PUBLISHERS.md`](LOOKIA_DW_PUBLISHERS.md) (the negotiation history); this doc is what consumers build against.
+**Status:** **accepted by lookia-dw 2026-05-16 — this is the wire-format authority.** Both lifecycle simplifications (§4.6 drop `.weapon_analyzed`; §4.7 single INSERT-only `.upserted`) and the renegotiated MAXLEN values (500k / 500k+2M backfill) were accepted without edit. Producer-side implementation tracking lives in [`LOOKIA_DW_PUBLISHERS.md`](LOOKIA_DW_PUBLISHERS.md); this doc is what consumers build against.
+
+DW-side state at acceptance: migration 011 already applied on Neon prod (6 tables for our slice + 1 face symmetry + 2 widenings); their worker + bulk_upsert build runs in parallel with our producer ship. When we push to main, DW expects to verify "within minutes."
 
 **Companion docs**
 - [`LOOKIA_DW_PUBLISHERS.md`](LOOKIA_DW_PUBLISHERS.md) — negotiation tracker (what was asked, what was negotiated, open items)
@@ -365,7 +367,7 @@ Pulled from [`src/db/models/constants.py`](../../src/db/models/constants.py). DW
 | `image_embedding_request.completed` | Status transitions to 3 (EMBEDDED) — **carries final `weapon_analyzed` / `has_weapon` / `weapon_classes` / `weapon_max_confidence` / `weapon_summary` values** |
 | `image_embedding_request.failed` | Status transitions to 5 (ERROR) |
 
-**⚠️ Note on `.weapon_analyzed`:** the original DW spec proposed a separate `.weapon_analyzed` event when the flag flips false→true post-INSERT. Our consumer writes the row atomically — `weapon_analyzed` is `true` (if upstream sent `weapon_analysis`) or `false` (if not) at INSERT time. **No async update path exists.** We've asked DW to drop the `.weapon_analyzed` event type and key off `weapon_analyzed=true` in the `.completed` payload instead. This contract assumes that simplification is accepted. If not accepted, we'll emit a redundant `.weapon_analyzed` event identical to `.completed` for schema parity.
+**Note on `.weapon_analyzed`:** the original DW spec proposed a separate `.weapon_analyzed` event when the flag flips false→true post-INSERT. Our consumer writes the row atomically — `weapon_analyzed` is `true` (if upstream sent `weapon_analysis`) or `false` (if not) at INSERT time. **No async update path exists.** Per DW's acceptance 2026-05-16, this event type is **dropped from the contract**; DW keys off `weapon_analyzed=true` in the `.completed` payload instead. Producer emits exactly the three event types listed in the table above.
 
 **Payload:**
 
@@ -456,7 +458,7 @@ Pulled from [`src/db/models/constants.py`](../../src/db/models/constants.py). DW
 
 **Trigger:** INSERT only.
 
-**⚠️ Note on UPDATE branch:** the original DW spec proposed a second `.upserted` event when `weapon_detections` is later populated. Our consumer writes `weapon_detections` at the initial INSERT (or stays NULL forever) — no async update path. **This contract assumes the single-INSERT-only simplification is accepted.** If DW pushes back, we'll emit a redundant second `.upserted` identical to the first.
+**Note on UPDATE branch:** the original DW spec proposed a second `.upserted` event when `weapon_detections` is later populated. Our consumer writes `weapon_detections` at the initial INSERT (or stays NULL forever) — no async update path. Per DW's acceptance 2026-05-16, this UPDATE branch is **dropped from the contract**. Producer emits exactly one `.upserted` per row at INSERT.
 
 **event_type:** `image_embedding.upserted`.
 
@@ -600,13 +602,18 @@ When this doc and producer code disagree, **producer code is the truth** — DW 
 
 | # | Item | Owner | Status |
 |---|---|---|---|
-| 1 | DW confirms lifecycle simplification (drop `.weapon_analyzed`; single INSERT-only `.upserted` for `image_embedding:raw`) | Lookia-DW | Pending |
-| 2 | DW confirms renegotiated MAXLEN (§4.6 = 500k, §4.7 = 500k / 2M for backfill) | Lookia-DW | Pending |
-| 3 | DW sends `dw_direct_load_image_embedding.py` for the 34k+265k historical seed | Lookia-DW | Will follow after producer ships |
-| 4 | We grant temporary read-only Postgres role on Neon for backfill | This service | On request |
-| 5 | Producer implementation (~150 LoC, ~2 hours) | This service | Blocked on #1 |
+| 1 | ~~DW confirms lifecycle simplification~~ | Lookia-DW | **✅ Resolved 2026-05-16** — accepted without edit |
+| 2 | ~~DW confirms renegotiated MAXLEN~~ | Lookia-DW | **✅ Resolved 2026-05-16** — accepted (§4.6 = 500k; §4.7 = 500k / 2M backfill) |
+| 3 | `dw_direct_load_image_embedding.py` for the 34k+265k historical seed | Lookia-DW | **In progress** — DW queued it next, ~30 min build |
+| 4 | Temporary read-only Postgres role on Neon for backfill | This service | **Pending DW request** — likely 2026-05-17 |
+| 5 | Producer implementation (~150 LoC, ~2 hours) | This service | **🟢 Unblocked — ready to start** (was blocked on #1) |
 | 6 | Negative test: assert `name` field never in `blacklist_image_entry:raw` payload | This service | Part of #5 |
-| 7 | `weapon_classes[]` canonical vocabulary — escalate to image-weapons-compute team | Image-weapons-compute | Optional, not blocking |
+| 7 | `weapon_classes[]` canonical vocabulary — escalate to image-weapons-compute team | Image-weapons-compute | Deferred (not blocking; DW will track distinct values as they appear and we can promote to enum dim later) |
+
+**DW-side parallel work in progress** (per their 2026-05-16 reply):
+- Migration 011 applied on Neon prod (6 tables for our slice + 1 face symmetry + 2 widenings)
+- Worker + bulk_upsert build runs alongside our producer ship
+- DW expects to verify within minutes of `git push origin main` from this side
 
 ---
 

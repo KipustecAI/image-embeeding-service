@@ -6,7 +6,7 @@
 
 **Companion (ours, authoritative for wire shape):** [`LOOKIA_DW_STREAMS.md`](LOOKIA_DW_STREAMS.md) — what the DW consumer actually builds against. This doc is the *negotiation tracker* (history, decisions, open items); the companion is the *contract* (payload schemas, examples, semantics).
 
-**Status:** **in-review → response delivered 2026-05-16.** Awaiting their confirmation on the simplified `.weapon_analyzed` event shape (see §"Lifecycle simplification") before we start implementation.
+**Status:** **accepted by lookia-dw 2026-05-16 — implementation queued.** Both lifecycle simplifications accepted without edit; MAXLEN renegotiation accepted; enum corrections noted on their side. We're unblocked to ship.
 
 ---
 
@@ -147,12 +147,19 @@ Estimate: ~150 LoC, ~2 focused hours.
 
 | # | Item | Owner | Status |
 |---|---|---|---|
-| 1 | DW confirms simplified lifecycle (drop `.weapon_analyzed` event, single INSERT-only `.upserted`) | Lookia-DW | Pending |
-| 2 | DW confirms upsized MAXLEN (500k / 500k–2M for the embed streams) | Lookia-DW | Pending — argued from volume data |
-| 3 | DW sends final `dw_direct_load_image_embedding.py` for the 34k+265k historical seed | Lookia-DW | Will follow after publisher accepted |
-| 4 | We grant temporary read-only Postgres role on Neon for backfill | This service | On request from DW |
-| 5 | Implementation (~150 LoC, ~2 hours) | This service | Blocked on #1 confirmation |
-| 6 | weapon_classes vocabulary canonical list — escalate to image-weapons-compute team for a stable enum (or accept it as upstream-defined and let DW catch new values dynamically) | Image-weapons-compute team | Optional, not blocking |
+| 1 | ~~DW confirms simplified lifecycle~~ | Lookia-DW | **✅ Accepted 2026-05-16** — no edits |
+| 2 | ~~DW confirms upsized MAXLEN~~ | Lookia-DW | **✅ Accepted 2026-05-16** — 500k / 500k+2M backfill |
+| 3 | `dw_direct_load_image_embedding.py` for historical seed (34k embedding_requests + 265k evidence_embeddings) | Lookia-DW | **In progress** — queued next, ~30 min build |
+| 4 | Temporary read-only Postgres role on Neon for backfill | This service | **Pending DW request** — likely 2026-05-17 |
+| 5 | Implementation (~150 LoC, ~2 hours) | This service | **🟢 Unblocked** (was blocked on #1) |
+| 6 | `weapon_classes` vocabulary canonical list | Image-weapons-compute team | Deferred — DW tracks distinct values dynamically; promote to enum dim later if the upstream model locks the vocabulary |
+
+**Notable DW-side state at acceptance:**
+
+- Migration 011 already applied on Neon prod — 6 tables for our slice plus 1 face-team symmetry table plus 2 widenings.
+- Worker + bulk_upsert build runs in parallel with our producer ship.
+- Verification expected within minutes of our `git push origin main`.
+- DW will mirror `SimilarityStatus` as a derived bool `has_matches` on their fact table for fast filtering, storing the raw int alongside. That's internal to them — doesn't affect our wire format.
 
 ---
 

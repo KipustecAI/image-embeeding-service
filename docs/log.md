@@ -14,6 +14,22 @@ Chronological append-only record of meaningful events in the wiki and the system
 
 ---
 
+## [2026-05-16] decision | lookia-dw accepted contract without edit — implementation unblocked
+
+DW agent confirmed [`LOOKIA_DW_STREAMS.md`](requirements/LOOKIA_DW_STREAMS.md) without edits. Both simplifications and the MAXLEN renegotiation accepted as proposed:
+
+- `image_embedding_request.weapon_analyzed` event type — **dropped**. DW keys off `weapon_analyzed=true` in `.completed` payload.
+- `image_embedding:raw` UPDATE branch — **dropped**. Single INSERT-only `.upserted` per row.
+- MAXLEN §4.6 = 500k, §4.7 = 500k / 2M backfill — **accepted**.
+- Enum corrections noted on their side: `SearchRequestStatus` values different from their original guess; `SimilarityStatus` 1/2 will be mirrored as a derived `has_matches` bool on their fact table for fast filtering.
+- `weapon_classes[]` free-form for v1 — they'll track distinct values dynamically; we can promote to enum dim later if the image-weapons-compute model ever locks the vocabulary.
+
+**DW-side parallel state:** migration 011 already applied on Neon prod (6 tables for our slice + 1 face-team symmetry + 2 widenings). Worker + bulk_upsert build runs alongside our producer ship. They expect to verify within minutes of `git push origin main` from our side. `dw_direct_load_image_embedding.py` queued next on their side (~30 min build). Read-only Postgres role request expected 2026-05-17 for the historical backfill.
+
+**Open items table on both wiki pages updated** to mark #1, #2 as resolved and #5 (producer implementation) as unblocked.
+
+**Implementation pending kick-off on our side** — ~150 LoC across `services/dw_publisher_service.py` + `helpers/dw_hashing.py` + 5 lifecycle hooks + `DW_MAXLEN_*` env vars + PII regression test. Estimated 2 focused hours.
+
 ## [2026-05-16] ingest | lookia-dw authoritative wire-format contract filed
 
 Companion to the negotiation tracker — filed [`requirements/LOOKIA_DW_STREAMS.md`](requirements/LOOKIA_DW_STREAMS.md) as the authoritative wire-format contract for the 7 outbound streams. Mirrors the pattern of [`REPORT_GENERATION_STREAMS.md`](requirements/REPORT_GENERATION_STREAMS.md): per-stream payload schemas + realistic examples + MAXLEN + trigger semantics + delivery / ordering / dedup conventions + versioning policy.
