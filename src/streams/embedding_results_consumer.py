@@ -165,10 +165,23 @@ async def _process_embeddings_result(payload: dict, message_id: str):
             if image_names:
                 image_map = await _zip_processor.download_and_extract(zip_url, image_names)
                 folder = f"embeddings/{camera_id}/{evidence_id}"
-                for name, img_bytes in image_map.items():
-                    public_url = await _storage_uploader.upload_image(
-                        img_bytes, name, folder, user_id=user_id or "embedding-service"
-                    )
+                # Bounded-parallel uploads — sequential uploads regularly blew
+                # the 300s consumer budget for ZIPs with many frames.
+                upload_sem = asyncio.Semaphore(8)
+                uploader_user = user_id or "embedding-service"
+
+                async def _upload(name: str, img_bytes: bytes) -> tuple[str, str | None]:
+                    async with upload_sem:
+                        url = await _storage_uploader.upload_image(
+                            img_bytes, name, folder, user_id=uploader_user
+                        )
+                    return name, url
+
+                results = await asyncio.gather(
+                    *(_upload(n, b) for n, b in image_map.items()),
+                    return_exceptions=False,
+                )
+                for name, public_url in results:
                     if public_url:
                         uploaded_urls[name] = public_url
 
