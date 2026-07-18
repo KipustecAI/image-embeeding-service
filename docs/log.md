@@ -14,6 +14,72 @@ Chronological append-only record of meaningful events in the wiki and the system
 
 ---
 
+## [2026-07-18] ship | image-index Phases 1+2+4 BUILT (gated-OFF) via delegate-build — verdict SHIP, re-verified
+
+Ran a 9-agent delegate-build workflow (`wf_93f78501-ea8`, 737k subagent tokens, ~35 min): **sequential implement (Foundations → Submit-intake → REST) → 5 parallel adversarial audit lenses → synthesis.** Verdict **SHIP, zero must-fixes** (all findings LOW nits). **Phase 3 (results consumer + reaper) + Phase 5 (live flip) intentionally HELD** pending the compute v1-FREEZE.
+
+**Built (all additive + gated behind `IMAGE_INDEX_ENABLED`, default False):**
+- **Foundations:** canonical Settings block, `ImageIndexBatchStatus`/`ImageIndexResultStatus`, `src/db/models/image_index.py` (both models), migration `f3a8d5c9e1b7_create_image_index_tables` (down_rev `e7f2c9a1b3d6`), standalone `ImageIndexVectorRepository` (own latch, shares live client, `asyncio.to_thread`), `image_index_repo.py` (ON-CONFLICT mint + absolute-count recompute + IDOR reads), `image_index_service.py` (single `terminal_status` helper), `tests/conftest.py` truncate fixture.
+- **Submit-intake:** `image_index_submit_consumer.py` (two-tier rejection, atomic idempotent mint, dispatch-on-fresh-mint + `computing` transition, `image_batch.created` w/ explicit `stream=`), gated `main.py` wiring stub (constructed-but-not-started).
+- **REST:** `api/v1/routers/image_index.py` + schemas — both GET legs incl. `by-external-id?all` (bounded le=200), strict IDOR (404 tenant-miss, 401 no-header), unconditional mount + `require_image_index_enabled` 503 gate; `API_REFERENCE.md` updated.
+
+**Hand-back re-verification (main thread, not trusting the SHIP):** app imports **24 routes** (22 baseline + 2 gated); `pytest` on the 4 suites **54 passed / 5 skipped** (DB-integration self-skip, no test DB); `ruff` clean; `alembic heads` single; `main.py` **+36/−0** additive; live `qdrant_repository.py` does **not** reference the dedicated repo (isolation holds); flag-off default False. Applied 1 nit (corrected a stale `StreamProducer.publish` docstring). **Note:** 2 of 5 audit lenses degenerated to placeholder output — the two I re-ran by hand (prod-safety/isolation + verify-rerun), so coverage held.
+
+**Deferred to a human (hard-rule / bilateral):** (a) live `alembic upgrade/downgrade` round-trip on a dev DB; (b) the 5 DB-integration repo tests against a migrated Postgres; (c) exercise the Qdrant repo against live Qdrant; **(pre-Phase-5 flip)** confirm the coordinator's submit `user_id` = the same tenancy key the REST read filters on (`owner_id`) — **fails closed** (over-restrictive, no IDOR leak), so not a commit blocker but must be nailed before enabling. **Nothing committed** — working-tree, pending Stanley's OK.
+
+## [2026-07-17] decision | image-index design VALIDATED via multi-agent workflow — verdict SHIP, docs filed
+
+Ran a 12-agent design-validation workflow (`image-index-design-validation`, run `wf_a83ef653-c70`; 1.08M subagent tokens, ~15 min): **6 design dimensions drafted in parallel → 5 adversarial audit lenses over the merged design → synthesis that applied the fixes + wrote the validated docs.** All 5 lenses returned FIX_NEEDED (10 must-fix findings total); synthesis resolved every one → **overall verdict SHIP** (no unresolved must-fix).
+
+**Docs filed under [`image-index/`](image-index/):** `README.md`, `00_DESIGN.md` (688 lines — validated design), `01_PLAN.md` (phased delegate-build plan). Cross-linked from [`index.md`](index.md) (new Feature section) + the companion [`requirements/IMAGE_INDEX_COMPUTE.md`](requirements/IMAGE_INDEX_COMPUTE.md).
+
+**Key contradictions the audit caught + settled (would've been latent bugs):**
+- **Lifecycle event_type** stated inconsistently (`batch.*` vs `image_batch.*`) — a bare `batch.*` would leave dw-offline's handler unmatched and **hang the no-HTTP coordinator**. Unified to `image_batch.{created,completed,failed}`.
+- **Terminal-status rule** stated THREE incompatible ways across dimensions — collapsed to one shared `terminal_status(counts)` helper with an **accounted-guard** (don't terminalize until `embedded+filtered+failed == submitted`; `completed` iff `failed==0` else `completed_with_errors`).
+- **Count vocabulary** drift — unified to one 4-key folded shape `{submitted, embedded, filtered, failed}` across lifecycle payload + DB columns + REST.
+- **Dedicated Qdrant repo** specified two mutually-exclusive ways — resolved to ONE standalone `ImageIndexVectorRepository` (own ensure/latch, **never** called from the live `initialize()`, shares the live `QdrantClient`) → protects the isolation guarantee.
+- Plus: atomic `ON CONFLICT` idempotent mint, `pending→computing` transition defined, write path wrapped in `asyncio.to_thread` (can't starve live consumers), admin IDOR bypass dropped, search endpoint deferred to v1.1, `?all` bounded.
+
+**Residual blocks (external coordination only):** (1) compute `IMAGE_INDEX_COMPUTE.md` still v1-DRAFT → gates Phase 3 land logic + live dispatch; (2) dw-offline must adopt the `image_batch.*` handler + 4-key summary + `target="image"` row; (3) gateway route registration for the public REST reads. **Nothing committed** — docs are working-tree, pending Stanley's review.
+
+## [2026-07-17] decision | new feature scoped — on-demand batch-index (face/plates/etl playbook) + compute-contract ask sent
+
+New feature greenlit by Stanley: an **on-demand batch-index + query** flow, mirroring `deepface-restapi` (`face:index`), `lookia-plates-service` (`plate:index`), and etl on-demand-analysis. The etl agent wrote the reusable playbook explicitly for us — `video-server_microservicios_etl-service/docs/concepts/async-index-compute-pattern.md` §10 maps every piece onto `image-embeeding-service` + `image-embedding-compute`.
+
+**Scope decisions (Stanley, this session):**
+- **Result semantics = FACE-STYLE** — the per-item payload is the **full 512-D CLIP vector**, stored in a dedicated Qdrant collection + a Postgres reference row. Indexed images become **searchable** via those vectors.
+- **Coordinator = dw-offline** as its **4th enrichment target** (`image`/`clip`, alongside face/plates/analysis).
+- **Naming = playbook defaults** — streams `image:index:submit` (coordinator→us) / `image:index` (us→compute) / `image:index:results` (compute→us) / lifecycle `image_batch:raw`; dedicated Qdrant collection `image_index_embeddings`; tables `t_image_index_batches` / `t_image_index_results`; REST `/api/v1/image-index/*`.
+- **Additive + isolated + gated-OFF** second flow — the live evidence/search/blacklist paths stay untouched (new `IMAGE_INDEX_ENABLED` flag, template = existing `recalculation_enabled`).
+
+**Compute-contract ask SENT (bilateral).** Filed the authoritative draft [`requirements/IMAGE_INDEX_COMPUTE.md`](requirements/IMAGE_INDEX_COMPUTE.md) (v1 DRAFT — they own the compute envelope, we own submit+lifecycle) and signalled the **`image-embedding-compute`** agent (thread `image-index-compute-contract`) to prepare their side in parallel. Their existing `image:embed:generic` is the atomic building block; the ask wraps it in a batch (N items → N results echoing `item_id`; per-item failures are dispositions, never raises). §5 open-items to close before v1-FREEZE: stream names, `N_CAP` (we propose 100), diversity-dedup y/n, vector-shape confirm, their impl choice.
+
+**Our-side grounding (code confirmed present):** `StreamConsumer` (`src/streams/consumer.py`), `EventPublisher` (`producer.py`), `collection_exists`-guarded Qdrant ensure (`qdrant_repository.py`), Clean-Arch DB models + 10 migrations, and the gating-flag pattern all already exist — the new work is the two consumers + reaper + 2 tables + dedicated collection + REST surface. **Next (pending Stanley's OK):** our-side design docs under `docs/image-index/` + a phased delegate-build plan. No code yet.
+
+## [2026-07-17] decision | GPU companion is an agentmemory peer — coordinate via slug `image-embedding-compute`
+
+Our upstream GPU sibling — the stateless CLIP-inference worker documented in [`new_arq_v2/02_COMPUTE_SERVICE.md`](new_arq_v2/02_COMPUTE_SERVICE.md) and the contract [`requirements/IMAGE_COMPUTE_STREAMS.md`](requirements/IMAGE_COMPUTE_STREAMS.md) — is now administered by a peer agent on the shared agentmemory layer with slug **`image-embedding-compute`**.
+
+**Name-spelling map (three distinct spellings — do not conflate):**
+- **Us:** `image-embeeding-service` (double-"e" typo; matches our dir + GitHub `KipustecAI/image-embeeding-service`).
+- **GPU sibling agent slug:** `image-embedding-compute` (single "embedding").
+- **GPU sibling repo:** dir `.../microservices/image-embedding-compute`, GitHub `KipustecAI/compute-image-embedding` (yet another spelling). Its own README calls it "embedding-compute".
+
+**Working relationship:** we share a Redis-Streams contract (`evidence:embed` / `evidence:search` outbound to it; `embeddings:results` / `search:results` inbound to us). It runs CLIP inference and hands us pre-computed 512D vectors; we persist + search + blacklist + publish. **Envelope-shape changes are bilateral** — coordinate any contract change with the `image-embedding-compute` agent (agentmemory signal) before shipping, per the negotiation model already used for the §2 category / §3 purpose asks. Do not unilaterally change envelope shapes. This mirrors the face-service ↔ face-embedding-compute pattern.
+
+## [2026-07-17] ship + decision | agentmemory onboarding + first self-audit (dead-code removal, P1s confirmed)
+
+Joined the shared agentmemory orchestration layer under the **lookia-ceo** registrar. Canonical registry slug is **`image-embeeding-service`** (the "embeeding" typo is deliberate — matches the dir and the `KipustecAI/image-embeeding-service` GitHub remote, so the slug stays stable). HANDOFF sent (`thr_mrpilye1_b30b833b8dcc`); ACK pending from lookia-ceo at time of writing.
+
+**First self-audit — findings (read-only verification against `src/`):**
+
+1. **CLAUDE.md is stale — CONFIRMED.** It describes a superseded v1 architecture (Video-Server integration, `X-API-Key` auth). Reality: auth is gateway-header-trust (`src/api/dependencies.py:33` reads `X-User-Id`, no API-key check on our own routes), matching `docs/API_REFERENCE.md`. *Refresh of CLAUDE.md still pending.*
+2. **Conda env — nuanced, not simply wrong.** CLAUDE.md names `image_compute_backend_p11`. That env exists and **does** carry this service's runtime deps (`fastapi` + `qdrant_client` + `arq`), so `make run-api`/`make test` work in it — but the name collides with an unrelated compute repo and the env also carries `torch`+`sentence_transformers` this no-CLIP service doesn't need. A sibling-named `img_embeeding_p11` env exists but lacks fastapi/qdrant/arq, so it **cannot** run this service. Env choice deferred to Stanley (keep shared env vs. provision a clean dedicated one).
+3. **Dead v1 code removed — SHIPPED (this entry).** `src/infrastructure/scheduler/arq_scheduler.py` + `src/infrastructure/api/video_server_client.py` referenced `settings.video_server_api_key` / `settings.video_server_base_url`, neither of which exists on `Settings` — the modules were doubly-dead (imported by nothing; `arq_scheduler` even did `from ..api import VideoServerClient` which the tombstoned `api/__init__.py` no longer exported). Both now-orphaned packages (`src/infrastructure/scheduler/`, `src/infrastructure/api/`) deleted entirely. Verified: FastAPI app still imports cleanly (22 routes); `grep` shows zero dangling references.
+4. **ARQ safety-net worker cannot start — NEW pre-existing bug (P1 #4 corroborated).** `src/workers/main.py:25` reads `settings.redis_database`, but `config.py` only defines `redis_streams_db` (DB 3) — `WorkerSettings` raises `AttributeError` on import, so `worker.py` crashes at startup. This means the 5 safety-net cron jobs (stale-recovery/recalc/cleanup) do not run as-is. Not fixed here — the correct Redis DB for the worker (streams DB 3 vs. app DB 5) and whether the worker should run in prod at all is Stanley's call. **Flagged, awaiting decision.**
+
+Cleanup verification and the dead-code removal were done as working-tree changes only — no commit (commits gated on Stanley's explicit OK).
+
 ## [2026-05-16] lint | architecture-docs refresh after DW publisher ship
 
 Targeted lint pass on the internal arch docs to absorb the DW integration without re-deriving on the next look. Pre-existing drift on `weapons:detected` (never documented in `04_STREAM_CONTRACTS.md` after Phase 04's report-gen work) fixed at the same time.

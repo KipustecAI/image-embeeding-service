@@ -55,6 +55,7 @@ Wire-level contracts with upstream / downstream services. Wiki layer — these a
 | Page | Summary | Layer |
 |---|---|---|
 | [requirements/IMAGE_COMPUTE_STREAMS.md](requirements/IMAGE_COMPUTE_STREAMS.md) | Field-additions ask sent to the compute team. Tracks the §2 category negotiation and §3 purpose/blacklist_entry_id echo. | wiki (negotiation-driven) |
+| [requirements/IMAGE_INDEX_COMPUTE.md](requirements/IMAGE_INDEX_COMPUTE.md) | **DRAFT** compute-envelope ask to `image-embedding-compute` for the new on-demand **batch-index** flow (face/plates/etl playbook). Dispatch `image:index` / results `image:index:results`, 512-D vector per item echoing `item_id`, disposition enum, §5 open-items to freeze. | wiki (negotiation-driven, DRAFT) |
 | [requirements/REPORT_GENERATION_STREAMS.md](requirements/REPORT_GENERATION_STREAMS.md) | Outbound contract to the report-generation team. §2 weapons:detected; §3 image:blacklist_match. **Canonical for those wire shapes.** | wiki (negotiation-driven) |
 | [requirements/LOOKIA_DW_PUBLISHERS.md](requirements/LOOKIA_DW_PUBLISHERS.md) | Inbound requirement from lookia-dw — 7 publish hooks feeding their data warehouse. **Negotiation tracker** — captures enum maps, MAXLEN sizing, lifecycle simplification asks, implementation plan. | wiki (negotiation-driven) |
 | [requirements/LOOKIA_DW_STREAMS.md](requirements/LOOKIA_DW_STREAMS.md) | **Authoritative wire-format contract** for the 7 outbound streams to lookia-dw. Per-stream payload schemas + examples + MAXLEN + delivery / ordering / dedup semantics. The DW consumer builds against this. | wiki (canonical contract) |
@@ -95,6 +96,19 @@ CLIP-based blacklist + the category infrastructure it depends on. Implementation
 | [image-blacklist/05_MATCH_AND_REPORT.md](image-blacklist/05_MATCH_AND_REPORT.md) | Inline-match block, `image:blacklist_match` DTO, shared publisher. | raw (plan) |
 | [image-blacklist/06_CRUD_API.md](image-blacklist/06_CRUD_API.md) | 8 REST endpoints + multi-tenant rules + version-bump policy. | raw (plan) |
 | [image-blacklist/07_DOCS_AND_VERIFICATION.md](image-blacklist/07_DOCS_AND_VERIFICATION.md) | Doc updates + manual end-to-end verification checklist. **Operational runbook.** | raw (plan) |
+
+---
+
+## Feature — On-demand image index (design, pre-build)
+
+The new additive/isolated/gated-OFF on-demand **batch-index + query** flow (face/plates/etl playbook). Design validated by a 6-dimension draft + 5-lens adversarial audit workflow (2026-07-17); build not started.
+
+| Page | Summary | Layer |
+|---|---|---|
+| [image-index/README.md](image-index/README.md) | Overview, locked decisions, post-audit resolutions, phase index, open-items table. | wiki (design) |
+| [image-index/00_DESIGN.md](image-index/00_DESIGN.md) | Validated design — wire topology, canonical Settings, data model + migration, dedicated Qdrant collection, streams/consumers/reaper, coordinator submit+lifecycle contract, REST surface, invariant map (§7), isolation proof, post-audit fix log. | wiki (design) |
+| [image-index/01_PLAN.md](image-index/01_PLAN.md) | Phased delegate-build plan (foundations → submit-intake → results+reaper → REST → live e2e); each additive + gated-OFF; compute-freeze dependencies marked. | wiki (design) |
+| [requirements/IMAGE_INDEX_COMPUTE.md](requirements/IMAGE_INDEX_COMPUTE.md) | Companion compute-envelope contract (owned by `image-embedding-compute`). **v1-DRAFT.** | wiki (negotiation-driven, DRAFT) |
 
 ---
 

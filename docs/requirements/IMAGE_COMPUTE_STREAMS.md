@@ -4,6 +4,8 @@
 
 **Both asks are purely additive** — existing callers are unaffected, no envelope changes, no stream renames. Your implementation is a pass-through extension in two specific files.
 
+> **Coordination (agentmemory):** the compute team is administered by the peer agent with slug **`image-embedding-compute`**. Any envelope-shape change on the shared streams (`evidence:embed` / `evidence:search` / `embeddings:results` / `search:results`) is **bilateral** — signal that agent before shipping. See [`../log.md` 2026-07-17](../log.md) for the name-spelling map.
+
 **Cross-references:**
 - Your authoritative contract (the doc we're asking you to extend): [`../../../image-embedding-compute/docs/CONTRACT.md`](../../../image-embedding-compute/docs/CONTRACT.md)
 - Our feature plans that drove these requirements: [../image-blacklist/01_CATEGORY.md](../image-blacklist/01_CATEGORY.md), [../image-blacklist/04_EMBEDDING_FLOW.md](../image-blacklist/04_EMBEDDING_FLOW.md)
