@@ -41,3 +41,37 @@ class BlacklistReferenceStatus:
     PROCESSING = 2
     PROCESSED = 3
     ERROR = 4
+
+
+class ImageIndexBatchStatus:
+    """Batch-level status for the on-demand image-index feature.
+
+    Stored as TEXT (CheckConstraint) so the vocabulary lines up 1:1 with the
+    coordinator lifecycle — unlike the integer status-machines above. See
+    docs/image-index/00_DESIGN.md §3.
+
+    Machine: pending → computing → {completed | completed_with_errors | error}
+    """
+
+    PENDING = "pending"
+    COMPUTING = "computing"
+    COMPLETED = "completed"
+    COMPLETED_WITH_ERRORS = "completed_with_errors"
+    ERROR = "error"
+
+
+class ImageIndexResultStatus:
+    """Per-item disposition for the on-demand image-index feature.
+
+    ``FAILED_SET`` members fold into the single ``failed`` count key. ``FILTERED``
+    is a clean disposition, never a downgrade. See docs/image-index/00_DESIGN.md §3.
+    """
+
+    EMBEDDED = "embedded"
+    DOWNLOAD_FAILED = "download_failed"
+    DECODE_FAILED = "decode_failed"
+    FILTERED = "filtered"
+    NO_RESULT = "no_result"
+
+    # → folds into failed_count
+    FAILED_SET = frozenset({DOWNLOAD_FAILED, DECODE_FAILED, NO_RESULT})

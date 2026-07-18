@@ -150,6 +150,57 @@ class Settings(BaseSettings):
     )
     dw_maxlen_image_embedding: int = Field(500_000, validation_alias="DW_MAXLEN_IMAGE_EMBEDDING")
 
+    # ── On-demand image-index (ADDITIVE, ISOLATED, gated-OFF) ────────────────
+    # Full spec: docs/image-index/00_DESIGN.md §2. Feature stays dark until this
+    # flag flips True after the Phase 5 live smoke. All Redis on redis_streams_db (DB 3).
+    image_index_enabled: bool = Field(False, validation_alias="IMAGE_INDEX_ENABLED")
+
+    # Streams (locked / playbook defaults)
+    stream_image_index_submit: str = Field(
+        "image:index:submit", validation_alias="STREAM_IMAGE_INDEX_SUBMIT"
+    )  # coordinator → us
+    stream_image_index: str = Field(
+        "image:index", validation_alias="STREAM_IMAGE_INDEX"
+    )  # us → compute (dispatch)
+    stream_image_index_results: str = Field(
+        "image:index:results", validation_alias="STREAM_IMAGE_INDEX_RESULTS"
+    )  # compute → us
+    stream_image_batch_raw: str = Field(
+        "image_batch:raw", validation_alias="STREAM_IMAGE_BATCH_RAW"
+    )  # us → coordinator (lifecycle)
+
+    # Dedicated consumer groups (isolated from the live backend-workers group)
+    image_index_submit_group: str = Field(
+        "image-index-submit", validation_alias="IMAGE_INDEX_SUBMIT_GROUP"
+    )
+    image_index_results_group: str = Field(
+        "image-index-results", validation_alias="IMAGE_INDEX_RESULTS_GROUP"
+    )
+
+    # Dedicated Qdrant collection (own ensure/latch; NOT in the live initialize())
+    qdrant_collection_image_index: str = Field(
+        "image_index_embeddings", validation_alias="QDRANT_COLLECTION_IMAGE_INDEX"
+    )
+
+    # Knobs
+    image_index_n_cap: int = Field(
+        100, validation_alias="IMAGE_INDEX_N_CAP"
+    )  # N_CAP (companion §1)
+    image_index_batch_maxlen: int = Field(
+        20_000, validation_alias="IMAGE_INDEX_BATCH_MAXLEN"
+    )  # image_batch:raw trim
+    image_index_max_compute_seconds: int = Field(
+        900, validation_alias="IMAGE_INDEX_MAX_COMPUTE_SECONDS"
+    )  # reaper cutoff
+    image_index_reaper_interval_seconds: int = Field(
+        60, validation_alias="IMAGE_INDEX_REAPER_INTERVAL_SECONDS"
+    )  # reaper cadence
+
+    @property
+    def image_index_collection(self) -> str:
+        """Read-only alias for `qdrant_collection_image_index` (§2 canonical name)."""
+        return self.qdrant_collection_image_index
+
     @field_validator("environment")
     @classmethod
     def validate_environment(cls, v: str) -> str:

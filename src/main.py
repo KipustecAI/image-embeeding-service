@@ -25,6 +25,7 @@ from sqlalchemy import text
 
 from src.api.dependencies import UserContext, get_user_context
 from src.api.v1.routers import blacklist_image as blacklist_image_router
+from src.api.v1.routers import image_index as image_index_router
 from src.application.helpers.source_type_filter import build_evidence_only_filter
 from src.application.helpers.weapon_filters import build_weapon_filter_conditions
 from src.db.repositories import EmbeddingRequestRepository, SearchRequestRepository
@@ -58,6 +59,11 @@ from src.streams.embedding_results_consumer import (
     set_stream_producer,
     set_vector_repo,
 )
+from src.streams.image_index_submit_consumer import (
+    create_image_index_submit_consumer,
+    set_submit_event_loop,
+    set_submit_producer,
+)
 from src.streams.producer import StreamProducer
 from src.streams.search_results_consumer import (
     create_search_results_consumer,
@@ -79,11 +85,13 @@ embed_consumer = None
 search_consumer = None
 vector_repo = None
 stream_producer = None
+image_index_submit_consumer = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global scheduler, embed_consumer, search_consumer, vector_repo, stream_producer
+    global image_index_submit_consumer
 
     logger.info("Starting Image Embedding Backend...")
 
@@ -174,6 +182,27 @@ async def lifespan(app: FastAPI):
     search_consumer.start()
     logger.info("Stream consumers started (embeddings:results + search:results)")
 
+    # 5. On-demand image-index submit intake (ADDITIVE, gated — Phase 2 stub).
+    # Constructed only when IMAGE_INDEX_ENABLED (default False → this whole
+    # block is skipped: zero runtime footprint). NOT started here — cold-start
+    # ordering (00_DESIGN §5.4) requires the results consumer to start FIRST,
+    # and that lands in Phase 3. The single gated block + .start() ordering are
+    # completed then. The LIVE dispatch to image:index must not go live until
+    # the compute v1-FREEZE; IMAGE_INDEX_ENABLED is that gate.
+    if settings.image_index_enabled:
+        set_submit_event_loop(loop)
+        set_submit_producer(stream_producer)
+        image_index_submit_consumer = create_image_index_submit_consumer()
+        # REST query surface (Phase 4) — the read path only needs Postgres, so it
+        # is available whenever the app is up and the flag is on. A future phase
+        # can pass available=(image_index_repo is not None) once the dedicated
+        # Qdrant repo is wired, so the router 503s in lock-step on an init failure.
+        image_index_router.set_image_index_router_deps(available=True)
+        logger.info(
+            "Image-index submit consumer constructed + REST query surface enabled "
+            "(consumer start deferred to Phase 3 results-first wiring)"
+        )
+
     logger.info("Image Embedding Backend ready")
 
     yield
@@ -185,6 +214,8 @@ async def lifespan(app: FastAPI):
         embed_consumer.stop()
     if search_consumer:
         search_consumer.stop()
+    if image_index_submit_consumer:
+        image_index_submit_consumer.stop()
 
     if scheduler and scheduler.running:
         scheduler.shutdown(wait=False)
@@ -204,6 +235,11 @@ app = FastAPI(
 
 # Image-blacklist CRUD (Phase 06) — see docs/BLACKLIST_API.md.
 app.include_router(blacklist_image_router.router)
+
+# On-demand image-index REST query surface (Phase 4) — mounted UNCONDITIONALLY;
+# every route 503s via require_image_index_enabled when the flag is off. See
+# docs/image-index/00_DESIGN.md §7.
+app.include_router(image_index_router.router)
 
 
 # ── Health & Stats ──

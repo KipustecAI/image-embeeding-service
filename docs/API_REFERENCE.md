@@ -33,6 +33,8 @@ See [GATEWAY_HEADERS.md](../../lookia/microservices/video-server_microservicios_
 | GET | `/api/v1/search/user/{user_id}` | List searches by user (paginated) |
 | POST | `/api/v1/recalculate/searches` | Re-queue old searches for recalculation |
 | — | `/api/v1/blacklist/image-entries/...` | **Blacklist (Image)** — see [BLACKLIST_API.md](BLACKLIST_API.md) for the full surface (8 endpoints) |
+| GET | `/api/v1/image-index/results/{batch_id}` | On-demand image-index: reconcile one batch (503 when feature off) |
+| GET | `/api/v1/image-index/results/by-external-id/{external_id}` | On-demand image-index: recover run(s) by external_id (`?all` bounded le=200) |
 
 ---
 
@@ -367,6 +369,36 @@ CLIP-based blacklist for flagging incoming evidence that visually matches user-r
 **Auth:** same `X-User-Id` / `X-User-Role` gateway headers as the search API. Non-admin callers see only their own tenant; admin/root/dev roles can see all and use `?user_id=<uuid>` to scope.
 
 **How matches surface:** matches don't come back through this API — they're published as `image:blacklist_match` events to the report-generation service. See [requirements/REPORT_GENERATION_STREAMS.md §3](requirements/REPORT_GENERATION_STREAMS.md) for the wire shape, or [BLACKLIST_API.md](BLACKLIST_API.md) for the user-facing workflow.
+
+---
+
+## Image Index (On-Demand Batch Index) — read-only query surface
+
+Read-only reconcile/recover surface for the on-demand image-index feature (submit + lifecycle ride Redis, not HTTP). **Gated:** every route returns **503** while `IMAGE_INDEX_ENABLED` is off. **Full design:** [image-index/00_DESIGN.md §7](image-index/00_DESIGN.md).
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/v1/image-index/results/{batch_id}` | Reconcile a single batch by its `batch_id` |
+| GET | `/api/v1/image-index/results/by-external-id/{external_id}` | Recover run(s) by (non-unique) `external_id` |
+
+**Query params.** `/results/{batch_id}`: `include_items` (bool, default `false` = counts-only), `limit` (1–500, default 100), `offset` (default 0). `/results/by-external-id/{external_id}`: `all` (bool; `true` → every run newest-first in a `{external_id, count, batches[]}` envelope, bounded `le=200`), plus `include_items`/`limit`/`offset` (single-run mode; items are always empty inside the `?all` list).
+
+**Response (single batch).** The counts are the single 4-key folded shape read straight off the denormalized columns — the query path never recomputes, and there is **no `matched` field**:
+
+```jsonc
+{
+  "batch_id":"a3c97b5a-…", "external_id":"run-42", "client_batch_ref":"dwoff-run42-b7",
+  "status":"completed",                                 // pending|computing|completed|completed_with_errors|error
+  "counts":{"submitted":3,"embedded":2,"filtered":0,"failed":1},
+  "source_ref":"run-42/vehicle", "created_at":"…", "completed_at":"…",
+  "error_message":null,                                 // set iff status=="error"
+  "items":[]                                            // present only when include_items=true
+}
+```
+
+**Auth / IDOR.** Same `X-User-Id` gateway header as the search API, but **strict tenant scoping — no admin bypass**. `user_id` is ALWAYS in the WHERE; a tenant-miss or a missing row → **404** (indistinguishable by design), missing `X-User-Id` → **401**, bad `limit`/`offset` → **422**.
+
+**Gateway prerequisite.** The public REST leg is blocked until the gateway `ROUTE_CONFIG` registers `/api/v1/embedding/image-index/*` → `/api/v1/image-index/*` (a clean sibling of the existing `/api/v1/embedding/{search,stats,pipeline,recalculate}` rewrites). Until it lands the frontend gets a **gateway** 404 (`{"detail":"Route not found: …"}`), distinct from a tenant-miss 404. The Redis submit/lifecycle legs do not depend on the gateway.
 
 ---
 
