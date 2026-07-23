@@ -14,6 +14,18 @@ Chronological append-only record of meaningful events in the wiki and the system
 
 ---
 
+## [2026-07-23] decision | image-index SEARCH + blacklist-xref design VALIDATED via workflow — verdict SHIP
+
+Ran a 12-agent design-validation workflow (`wf_df5cfb75-a9e`, 1.21M subagent tokens): 6 design dimensions → 5 adversarial lenses → synthesis. All 5 lenses FIX_NEEDED (12 must-fix findings); synthesis resolved them → **SHIP**. Design filed at [`image-index/02_SEARCH_DESIGN.md`](image-index/02_SEARCH_DESIGN.md) (806 lines).
+
+**Two additive, gated-OFF capabilities** on top of the shipped image-index feature (Stanley-scoped):
+- **A — async search-by-image over `external_ids`.** `POST /api/v1/embedding/image-index/search {image_url, external_ids[], threshold?, max_results?}` → 202 → poll. **Reuses** the evidence `search_requests`/`search_matches` tables (with a `search_type` discriminator + real `external_ids`/`external_id` columns) for state recovery, and the evidence embed dispatch/consumer (query image → compute embeds → search `image_index_embeddings` scoped by `user_id` + `external_id` MatchAny). Query vector stored → recalculation for free. Each match tagged with its `external_id`.
+- **B — GPU-free blacklist cross-reference.** Given a blacklist entry + `external_ids`, fetch the STORED blacklist vector (`get_point_vector`, no compute) and search `image_index_embeddings` — "does this blacklisted image appear in these runs?". Valid because both collections are the **same 512-D CLIP ViT-B-32 / COSINE space** (audit VERIFIED against `qdrant_repository.py:90/109` + `image_index_vector_repository.py:96-98`). **Trigger = BOTH, staged: REST endpoint in v1** (GPU-free → sync inline, lowest blast radius), **auto-on-land hook in v1.1** behind its own flag.
+
+**Key risks the audit caught + baked into the design:** (M1) ONE canonical `search_type='image_index'` name end-to-end — a mismatch would fall image-index replies through the un-tenant-scoped evidence block (**cross-tenant leak**); (M2) `evidence_id = item_ref or qdrant_point_id` NOT-NULL fallback; (M3) recalc guarded `search_type=='evidence'` else image-index rows re-search evidence with cross-tenant overwrite; (M4) `external_ids` as REAL columns (the "bury in metadata" variant is a confirmed shadow-drop bug); (S1) add `model_version` stamp to `upsert_items` NOW (blacklist already stamps it; asymmetry would silently decalibrate B on a model bump); threshold portability = comparability not a preserved operating point → gate B prod-enable behind an empirical sweep.
+
+**Shared new primitive:** `get_point_vector(point_id)` on both vector repos. **Phase plan:** P1 qdrant primitives → P2 Cap-A async search → P3 Cap-B REST (v1) → P3b Cap-B auto-hook (v1.1) → P4 live e2e + flip. Wired into [`index.md`](index.md). **Next (pending Stanley):** delegate-build P1→P3.
+
 ## [2026-07-23] verification | image-index **v1.1 + v1.2 VERIFIED LIVE in prod** — docs handed to dw-offline
 
 Both sides deployed (compute `a087582`, our v1.1/v1.2 `f279a95`). Ran the e2e skill against the live prod pipeline:

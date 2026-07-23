@@ -190,7 +190,7 @@ curl "https://api.lookia.mx/api/v1/embedding/image-index/results/by-external-id/
 - **`completed_with_errors` is normal** — a bad/expired crop URL yields `download_failed` for that item; the batch still completes.
 - **`error` is batch-level only** (rejected submit, compute batch failure, reaper timeout) — never a single bad image.
 - **Idempotency:** re-submitting the same `client_batch_ref` re-binds the **same** batch (no duplicate work); a genuinely new run under the same `external_id` creates a new batch — use `?all=true` to see the history.
-- **Vectors are stored + searchable, but there is no query-time search *endpoint* yet** — `POST /api/v1/image-index/search` is not shipped in the current release; vectors land in `image_index_embeddings` (payload-indexed on `user_id`/`external_id`/`batch_id`) and these read legs recover them. A search endpoint is a future addition.
+- **Vectors are stored + searchable, but there is no query-time search *endpoint* yet** — `POST /api/v1/image-index/search` is not shipped in the current release; vectors land in `image_index_embeddings` (payload-indexed on `user_id`/`external_id`/`batch_id`) and these read legs recover them. **An async search-by-image endpoint (scoped to a list of `external_ids`) is designed + validated** — see [`../image-index/02_SEARCH_DESIGN.md`](../image-index/02_SEARCH_DESIGN.md) §6.
 
 ---
 
