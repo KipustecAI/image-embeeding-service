@@ -29,7 +29,7 @@ Consumer-facing contracts for the HTTP API. Wiki layer — current state.
 | [BLACKLIST_API.md](BLACKLIST_API.md) | Standalone consumer-facing contract for the `/api/v1/blacklist/image-entries` surface. Designed for the frontend team. | wiki |
 | [CURL_EXAMPLES.md](CURL_EXAMPLES.md) | Curl cookbook — usage examples for search (with weapons / category / blacklist filters), blacklist CRUD, stream debugging. | wiki |
 | [apis/IMAGE_INDEX_SUBMIT.md](apis/IMAGE_INDEX_SUBMIT.md) | **Coordinator contract** for the on-demand image-index — Redis-only intake (`image:index:submit`), two-tier rejection, idempotency, `image_batch:raw` lifecycle + status machine + 4-key counts. Sibling of plates `PLATE_INDEX_SUBMIT.md`. | wiki (consumer contract) |
-| [apis/IMAGE_INDEX_API.md](apis/IMAGE_INDEX_API.md) | **Frontend read contract** for the on-demand image-index — `GET /results/{batch_id}` + `GET /results/by-external-id/{external_id}?all`, response/item shapes, status codes, gateway prefix. Sibling of `FACE_INDEX_API.md` §4–5. | wiki (consumer contract) |
+| [apis/IMAGE_INDEX_API.md](apis/IMAGE_INDEX_API.md) | **Frontend contract** for the on-demand image-index — recovery (`GET /results/{batch_id}` + `/by-external-id`), **§5 search-by-image** (`POST …/image-index/search` → poll → matches, scoped to `external_ids`), **§6 GPU-free blacklist cross-reference** (`POST …/images/blacklist/{id}/cross-reference`). All ✅ live + verified in prod. Sibling of `FACE_INDEX_API.md`. | wiki (consumer contract) |
 
 ---
 

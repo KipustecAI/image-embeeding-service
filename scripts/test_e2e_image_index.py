@@ -395,7 +395,8 @@ def main() -> int:
         c3, mb = http_get(f"{base}/{sid}/matches?limit=50", args.api_key)
         print(json.dumps(mb, indent=2, default=str))
         matches = mb.get("matches", []) if isinstance(mb, dict) else []
-        top = max((m.get("similarity_score", 0) for m in matches), default=0)
+        # Cap-A /matches uses `score`; Cap-B xref uses `similarity_score`.
+        top = max((m.get("score", m.get("similarity_score", 0)) for m in matches), default=0)
         ok = st == "completed" and top >= 0.9 and all(
             m.get("external_id") in ext_ids for m in matches)
         print(f"\n  ✓ terminal completed: {st == 'completed'}")

@@ -14,6 +14,17 @@ Chronological append-only record of meaningful events in the wiki and the system
 
 ---
 
+## [2026-07-23] verification + ingest | image-index SEARCH + blacklist-xref VERIFIED LIVE in prod; API doc updated for the frontend
+
+Deployed with `IMAGE_INDEX_SEARCH_ENABLED` **default-true** (`02fa6d8` — search is prod-standard, not an opt-in toggle; the auto-hook stays default-false pending report-gen). Ran the full test plan against prod:
+
+- **Cap A search — PASS ✅** — indexed E1=[IMG_A,IMG_B] + E2=[IMG_B]; `POST …/image-index/search` (query IMG_A over [E1,E2]) → **self-match `score 0.9999998`** @ E1, all matches scoped to the requested `external_ids`, Qdrant verified (`model_version=clip-vit-b-32`). Negative: a non-owned `external_id` → `total_matches:0`.
+- **Cap B cross-reference — PASS ✅** — created a blacklist entry with IMG_A → `INDEXED`; `POST …/images/blacklist/{id}/cross-reference` over [E1,E2] → the blacklisted image found @ E1 at **`similarity_score 0.9999998`**, **GPU-free confirmed** (embed streams `image:index`/`evidence:search` unchanged 4→4). **The cross-collection same-space premise is now VERIFIED LIVE** — a blacklist vector in `evidence_embeddings` matched an `image_index_embeddings` point at ~1.0, proving cosine is comparable across collections.
+- **Gateway:** no new registration needed — both surfaces are prefix-covered by the existing `/api/v1/embedding/image-index/*` + `/api/v1/images/blacklist/*` entries (confirmed by the live calls). Informed `api-gateway` (`sig_mry5lqb5`) for their docs/monitoring.
+- **B2 auto-hook:** not tested (autocheck flag off) — deferred pending report-gen sign-off, as designed.
+
+**API doc updated for the frontend** ([`apis/IMAGE_INDEX_API.md`](apis/IMAGE_INDEX_API.md) → **v1.2**): new **§5 Search by image** (submit → poll → matches; the "positivity per `external_id`" grouping tip; the exact verified response shapes) + **§6 Blacklist cross-reference** (sync GPU-free, prereq INDEXED entry, verified shapes). Status banner + §2 flow-at-a-glance updated; §7–§10 renumbered. Every example uses the real shapes returned in the test run so integration is copy-paste. e2e runner extended with `--search`/`--xref`/`--verify-qdrant` (live Qdrant/Redis via `.env`).
+
 ## [2026-07-23] ship | image-index SEARCH (Cap A) + blacklist cross-ref (Cap B) BUILT (gated-OFF) — verdict SHIP, re-verified
 
 9-agent delegate-build (`wf_31f73aac-772`) to [`02_SEARCH_DESIGN.md`](image-index/02_SEARCH_DESIGN.md): 3 sequential increments → 5 audit lenses → synthesis. **Verdict SHIP.** (One audit lens — verify-rerun — died on a StructuredOutput cap; I did its job by hand.)
