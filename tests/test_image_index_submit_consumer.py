@@ -99,10 +99,45 @@ def test_validate_over_cap():
     assert err == "batch exceeds N_CAP=3 (got 5)"
 
 
+# ── v1.1 vocabulary alias: images/image_id accepted alongside items/item_id ──
+
+
+def test_validate_ok_with_images_image_id_alias():
+    """Portfolio-standard `images:[{image_url, image_id}]` validates like `items`."""
+    payload = _submit_payload()
+    del payload["items"]
+    payload["images"] = [
+        {"image_id": "ev-0", "image_url": "https://cdn/a.jpg"},
+        {"image_id": "ev-1", "image_url": "http://cdn/b.jpg"},
+    ]
+    assert ImageIndexService._validate_submit(payload, n_cap=100) is None
+
+
+def test_validate_missing_id_message_names_both():
+    payload = _submit_payload(items=[{"image_url": "https://x/y.jpg"}])
+    err = ImageIndexService._validate_submit(payload, n_cap=100)
+    assert err == "item 0 missing item_id/image_id"
+
+
+def test_extract_items_prefers_native_over_alias():
+    native = [{"item_id": "a", "image_url": "https://x"}]
+    alias = [{"image_id": "b", "image_url": "https://y"}]
+    assert ImageIndexService.extract_items({"items": native, "images": alias}) is native
+    assert ImageIndexService.extract_items({"images": alias}) is alias
+    assert ImageIndexService.extract_items({}) is None
+
+
+def test_item_id_of_prefers_native_over_alias():
+    assert ImageIndexService.item_id_of({"item_id": "a", "image_id": "b"}) == "a"
+    assert ImageIndexService.item_id_of({"image_id": "b"}) == "b"
+    assert ImageIndexService.item_id_of({}) is None
+    assert ImageIndexService.item_id_of("nope") is None
+
+
 def test_validate_missing_item_id():
     items = [{"item_id": "", "image_url": "https://x/y.jpg"}]
     err = ImageIndexService._validate_submit(_submit_payload(items=items), n_cap=100)
-    assert err == "item 0 missing item_id"
+    assert err == "item 0 missing item_id/image_id"
 
 
 def test_validate_bad_url_scheme():

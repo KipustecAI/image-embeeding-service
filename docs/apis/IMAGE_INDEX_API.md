@@ -80,7 +80,8 @@ Poll until `status` is terminal: `completed`, `completed_with_errors`, or `error
 
 | Field | Type | Description |
 |---|---|---|
-| `item_ref` | string | **your `item_id`**, echoed |
+| `item_ref` | string | **your `item_id`** (or `image_id`), echoed |
+| `image_id` | string | **v1.1 alias** of `item_ref` — same value, for parity with face/plates/analysis |
 | `source_url` | string \| null | the submitted image URL |
 | `item_index` | int | position in the submitted array (0-based) |
 | `status` | string | `embedded`｜`download_failed`｜`decode_failed`｜`no_result` |
@@ -226,9 +227,12 @@ item row per submitted; each `embedded` item carries a `qdrant_point_id`. End-to
 (submit → completed) was **< 1 s** for a 2-image batch. Reproduce with
 `scripts/test_e2e_image_index.py` (skill: `image-index-e2e`).
 
-> **Note:** `source_url` is `null` in v1 — the compute results wire doesn't echo the image URL back,
-> so the reference row stores none. If the frontend needs it, it's an additive v1.1 field.
+> **Note:** `source_url` was `null` in base v1 (the compute results wire didn't echo the image URL).
+> **v1.1 populates it** — `image-embedding-compute` now echoes `image_url` on every result and we
+> persist it as `source_url` (both on the reference row and in the Qdrant point payload). Older v1
+> batches keep `null`; batches embedded after the v1.1 deploy carry the URL. (The example above
+> predates the echo, hence `null`.)
 
 ## 8. Version
 
-Contract **v1** (2026-07-22; verified live 2026-07-23). Compute envelope **v1-FROZEN** — [`../requirements/IMAGE_INDEX_COMPUTE.md`](../requirements/IMAGE_INDEX_COMPUTE.md). Design + rationale: [`../image-index/00_DESIGN.md`](../image-index/00_DESIGN.md) §7. Reference analogs: `deepface-restapi/docs/apis/FACE_INDEX_API.md` §4–5, `lookia-plates-service/docs/apis/PLATE_INDEX_API.md` §4–5, `video-server_microservicios_etl-service/docs/apis/ONDEMAND_ANALYSIS_API.md` §3.
+Contract **v1.1** (2026-07-23 — additive `image_id` result alias; base v1 2026-07-22 verified live 2026-07-23). Compute envelope **v1-FROZEN** — [`../requirements/IMAGE_INDEX_COMPUTE.md`](../requirements/IMAGE_INDEX_COMPUTE.md). Design + rationale: [`../image-index/00_DESIGN.md`](../image-index/00_DESIGN.md) §7. Reference analogs: `deepface-restapi/docs/apis/FACE_INDEX_API.md` §4–5, `lookia-plates-service/docs/apis/PLATE_INDEX_API.md` §4–5, `video-server_microservicios_etl-service/docs/apis/ONDEMAND_ANALYSIS_API.md` §3.

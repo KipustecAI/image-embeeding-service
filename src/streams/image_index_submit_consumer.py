@@ -190,9 +190,14 @@ async def _process_submit(payload: dict, message_id: str) -> None:
 
     # ── Fresh mint → dispatch → computing → image_batch.created ──
     # item_index is minted here (0-based submit order); the caller never sends it.
+    # v1.1: accept the portfolio-standard images/image_id alias (validated above).
     dispatch_items = [
-        {"item_id": it["item_id"], "image_url": it["image_url"], "item_index": i}
-        for i, it in enumerate(payload["items"])
+        {
+            "item_id": ImageIndexService.item_id_of(it),
+            "image_url": it["image_url"],
+            "item_index": i,
+        }
+        for i, it in enumerate(ImageIndexService.extract_items(payload))
     ]
     _producer.publish(
         stream=settings.stream_image_index,

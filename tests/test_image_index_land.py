@@ -262,6 +262,28 @@ async def test_land_idempotent_reland_stable():
     assert image_index_point_id(BATCH_ID, 0) != image_index_point_id(BATCH_ID, 1)
 
 
+async def test_v11_image_url_echo_persisted_as_source_url():
+    """v1.1: compute echoes `image_url`; we persist it as source_url (DB + Qdrant)."""
+    item = _embedded_item(0, [0.5] * 512)
+    item["image_url"] = "https://storage.lookia.mx/crops/run/kept_0.png"
+    payload = {"batch_id": BATCH_ID, "results": [item]}
+    counts = {"submitted": 1, "embedded": 1, "filtered": 0, "failed": 0}
+    _, repo, vector_repo, _ = await _land(payload, _make_batch(submitted=1), counts)
+    assert repo.upsert_result.call_args.kwargs["source_url"] == item["image_url"]
+    point = vector_repo.upsert_items.call_args.args[0][0]
+    assert point["source_url"] == item["image_url"]
+
+
+async def test_v11_empty_image_url_persists_as_none():
+    """Compute sends `image_url=""` when the input omitted it → we store None."""
+    item = _embedded_item(0, [0.5] * 512)
+    item["image_url"] = ""
+    payload = {"batch_id": BATCH_ID, "results": [item]}
+    counts = {"submitted": 1, "embedded": 1, "filtered": 0, "failed": 0}
+    _, repo, _, _ = await _land(payload, _make_batch(submitted=1), counts)
+    assert repo.upsert_result.call_args.kwargs["source_url"] is None
+
+
 async def test_reference_row_gets_deterministic_point_id():
     payload = {"batch_id": BATCH_ID, "results": [_embedded_item(2, [0.9] * 512)]}
     counts = {"submitted": 1, "embedded": 1, "filtered": 0, "failed": 0}

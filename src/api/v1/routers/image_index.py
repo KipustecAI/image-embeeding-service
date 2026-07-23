@@ -114,6 +114,7 @@ def _require_user(ctx: UserContext) -> str:
 def _item_to_response(item: ImageIndexResult) -> ItemResult:
     return ItemResult(
         item_ref=item.item_ref,
+        image_id=item.item_ref,  # v1.1 alias for portfolio parity
         source_url=item.source_url,
         item_index=item.item_index,
         status=item.status,

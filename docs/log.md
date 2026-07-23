@@ -14,6 +14,31 @@ Chronological append-only record of meaningful events in the wiki and the system
 
 ---
 
+## [2026-07-23] ship | image-index **v1.1 + v1.2 CLOSED both sides** — source_url populated, progress stream locked
+
+`image-embedding-compute` over-delivered (`sig_mrx2kjg2`): confirmed the bilateral smoke (batches `3d998aac` + `0e3dcb9d`, 2→2→0 both) AND shipped **both** compute-side asks already.
+
+**v1.1 `source_url` — WIRED on our side.** Compute now echoes `image_url` verbatim on **every** result disposition (embedded + failures; empty string when omitted). Our `land_computed` persists it as `source_url` on the reference row **and** the Qdrant point payload (`"" → NULL`). `item_ref` also now reads the `item_id`/`image_id` alias. **97 image-index tests green** (2 new: populate + empty→null). Only batches embedded post-deploy carry it; older rows stay null (documented in `IMAGE_INDEX_API.md`).
+
+**v1.2 `image:index:progress` — LOCKED.** Compute shipped the emitter; final `payload {batch_id, processed, total, embedded_so_far, failed_so_far, stage}`, `stage ∈ downloading|embedding`, `MAXLEN~1000`, `MIN_BATCH=20`. **We do NOT consume it** (coordinators multiplex directly). Documented as the locked §2B PROGRESS leg with the **critical render semantic**: `processed == embedded_so_far + failed_so_far` (TERMINAL-only) → it stays ~0 during download and climbs during embedding, so **render the download phase from `stage`, not `processed`** (else the bar looks stuck). Accepted compute's design (it's the only globally-monotonic single-counter mapping); relayed the semantic to dw-offline (`sig_mrxx6ufh`) so their consumer renders it right, and closed with compute (`sig_mrxx6ggj`).
+
+**Whole image-index roadmap now CLOSED on both sides (v1 + v1.1 + v1.2).** The only remaining external gate before the first real coordinator run is the **detection-worker crop-folder fix `c45b72e` deploy** (dw-offline holds until then; then we co-run + send compute a real run-scoped `batch_id`).
+
+## [2026-07-23] ship + decision | image-index **v1.1** — wire-vocabulary convergence + crop-collision review + companion pings
+
+Responding to dw-offline's integration feedback (`sig_mrwzaulp` — they built `target="image"`, 96 tests, migration 0018) and Stanley's "move to v1.1 once for all + loop the companion worker in for parallel work."
+
+**v1.1 shipped (additive, non-breaking):** the submit envelope now accepts the **portfolio-standard `images:[{image_url, image_id}]`** as an alias for our native `items:[{image_url, item_id}]` (native wins if both present) — via `ImageIndexService.extract_items()` + `item_id_of()`, used in `_validate_submit`, `submit_batch_created`, `create_error_batch`, and the submit consumer's dispatch build. Result side: each item now carries **both `item_ref` and `image_id`** (same value) for family parity. So a coordinator can drop its translation adapter and send `images`/`image_id` straight through like face/plates/analysis. Docs bumped to v1.1 (`IMAGE_INDEX_SUBMIT.md §1`, `IMAGE_INDEX_API.md §5/§8`). **95 image-index unit tests green** (incl. alias-precedence + `missing item_id/image_id` message). The compute dispatch envelope is **UNCHANGED** — this is entirely our-side.
+
+**Crop-collision fix reviewed (dw-offline's blocker for the first co-run):** detection-worker commit **`c45b72e`** "Fix crop uploads landing at bucket root and colliding across runs" — root cause was the storage upload API silently discarding an unknown `key` form field → `folder` defaulted None → bucket-root basenames (`kept_%06d.png`) collided across runs (2,207 rows / 16 runs poisoned). Fix = `dirname(key)`→folder / `basename`→file split + per-run `crops/{job_id}/dedup/...` namespacing. **Correct + belt-and-suspenders; committed, pending deploy.** Until it deploys+verifies, a crop URL's pixels can change post-embed → a permanently wrong vector. **We hold the first real co-run** until dw-offline confirms the deploy.
+
+**Coordination signals sent:**
+- **api-gateway** (`sig_mrx0oubn`) — smoke PASS ack + the Cloudflare-UA note for their diagnostic table.
+- **dw-offline** (`sig_mrx0p34n`) — (a) co-run-hold ack + fix review; (b) no progress stream in v1.1, watchdog guidance (compute ceiling 300s, our reaper 900s → set ≥960s); (c) vocabulary alias SHIPPED (drop your adapter whenever).
+- **image-embedding-compute** (`sig_mrx0pk6j`) — smoke cross-check (batches `3d998aac`, `0e3dcb9d`); the one compute-side v1.1 ask to build in parallel: **echo `image_url` on results** so we can populate the currently-null `source_url` (additive, worker-first); + the crop-collision FYI (we're holding dispatch, no poisoned URLs reach them via us).
+
+**v1.2 also started in parallel (Stanley: "finish all this once for all"):** the advisory **`image:index:progress`** stream. Compute emits it during embedding; coordinators multiplex it directly with their own consumer group (Redis fan-out) — **we do NOT sit on that path** (our REST read stays DB-backed/atomic), mirroring plates' `…:progress` and face's `face:index:progress`. Shape: `{event_type:"image.index.progress", payload:{batch_id, processed, total, embedded_so_far, failed_so_far, stage?}}`, advisory + best-effort + monotonic + **ephemeral** (small MAXLEN, no replay, never terminal), emitted only for **≥20-item** batches. Asked compute (`sig_mrx10apu`, thread `thr_mrpk005r`); documented as the optional PROGRESS leg in [`apis/IMAGE_INDEX_SUBMIT.md §2B`](apis/IMAGE_INDEX_SUBMIT.md) (marked v1.2/pending-compute); synced dw-offline (`sig_mrx1636r`) — their empty-stream-skipping progress consumer just lights up for `image` once compute ships, no other change their side. **Field names lock to compute's final choice.** Both v1.2 compute asks (progress + `image_url` echo) are additive/worker-first — zero change to the frozen dispatch/results envelopes, and **nothing new lands on our critical path** (v1.2 is compute-emit + docs on our side).
+
 ## [2026-07-23] verification + ingest | image-index gateway READ **PASS live**; API docs → verified-live; dw-offline pinged
 
 **api-gateway registered the route** (`/api/v1/embedding/image-index/*` → `ms-embedding-api` `/api/v1/image-index/*`) and deployed it. Re-ran the full e2e default (gateway) mode:

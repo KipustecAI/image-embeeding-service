@@ -31,9 +31,15 @@ class BatchCounts(BaseModel):
 
 
 class ItemResult(BaseModel):
-    """One result row — present only when ``include_items=true``."""
+    """One result row — present only when ``include_items=true``.
+
+    ``image_id`` is a v1.1 alias of ``item_ref`` (the caller's echoed id) for
+    portfolio parity with face/plates/analysis, which echo ``image_id``. Both
+    carry the same value.
+    """
 
     item_ref: str
+    image_id: str
     source_url: str | None
     item_index: int
     status: str

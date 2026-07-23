@@ -48,6 +48,12 @@ Envelope: flat hash `{event_type: "image.index.submit", payload: <json string>}`
 
 > `item_index` is **minted by us** from the 0-based submit order — do **not** send it.
 
+> **v1.1 vocabulary alias (additive, non-breaking):** for parity with the face / plates / analysis
+> targets, the submit payload also accepts the portfolio-standard **`images:[{image_url, image_id}]`**
+> as an alias for `items:[{image_url, item_id}]`. Send either; if both are present the native
+> `items`/`item_id` wins. `image_id` is echoed back on the result as **both** `item_ref` and `image_id`
+> (same value). New integrations may use whichever the rest of the family uses.
+
 **Example (Python `redis`):**
 ```python
 import json, redis
@@ -126,6 +132,41 @@ Attach your **own** consumer group (e.g. `dwoff-image-acks`). Events `{event_typ
 
 ---
 
+## 2B. PROGRESS (optional) — multiplex the progress stream  🟢 v1.2 (shipped by compute)
+
+For a live progress bar on a large batch, attach your **own** consumer group to the advisory stream
+**`image:index:progress`** and read the same events a frontend would — a Redis fan-out (independent
+cursors, zero contention). Mirrors plates' `…:progress` and face's `face:index:progress`.
+
+- Emitted **by `image-embedding-compute`** as it embeds (the progress granularity lives on the GPU
+  side; we do not sit on this path). Two-field `{event_type:"image.index.progress", payload:<json>}`.
+- **`payload` (locked, v1.2):** `{batch_id, processed, total, embedded_so_far, failed_so_far, stage}`
+  where `stage ∈ {"downloading", "embedding"}`.
+- **Advisory + best-effort + monotonic**, **ephemeral** (`MAXLEN ~1000`, no replay, **never terminal**).
+- Emitted **only for batches ≥ 20 items** (`IMAGE_INDEX_PROGRESS_MIN_BATCH=20`) — small/fast batches
+  finish before a bar matters; below the threshold the stream is empty and you treat that as "no
+  progress" (same as analysis today). Profile for a 100-item batch: one `downloading` heartbeat at
+  entry, then ~20 throttled `embedding` frames climbing to 100/100.
+- **Authoritative status is always `image_batch:raw`** — `progress` is a live estimate, never the
+  source of truth; read `counts` on the terminal event for the final numbers.
+
+> ⚠️ **CRITICAL RENDER SEMANTIC — `processed` counts TERMINAL dispositions only:**
+> `processed == embedded_so_far + failed_so_far`. A downloaded-but-not-yet-embedded item is **not**
+> terminal, so during the **download** phase `processed` stays near `0` (it only moves on failures)
+> and then climbs to `total` during the **embedding** phase. This is the one mapping that is globally
+> **monotonic** across compute's two phases (a single `0..total` counter that also moved during
+> download would have to regress at the phase boundary). **Render the download phase from `stage`, NOT
+> from `processed`:** `stage=="downloading"` → an indeterminate "Downloading N images…" state;
+> `stage=="embedding"` → a determinate `processed/total` bar. (If your UX genuinely needs motion during
+> download, compute can add a separate `download_processed` field — coordinate on `thr_mrpk005r` before
+> building the consumer.)
+
+> 🟢 **Status: v1.2 shipped by `image-embedding-compute`** (thread `thr_mrpk005r`). Field names above are
+> **final**. Until you point a consumer at it, rely on the `image_batch:raw` lifecycle + a stale-batch
+> watchdog (recommended ≥ ~960 s, just outside our reaper's 900 s backstop).
+
+---
+
 ## 3. Result recovery
 
 Results stay in **our DB + Qdrant**. You are **seed + coordinator — you never call HTTP.** The `image_batch.completed` counts tell you what landed; the enriched per-item rows (status, `qdrant_point_id`) are recovered by a frontend/REST client by `external_id` — see **[IMAGE_INDEX_API.md](./IMAGE_INDEX_API.md)**.
@@ -140,4 +181,4 @@ Our `image:index:submit` consumer group is created at service start — it must 
 
 ## 5. Version
 
-Redis submit-intake **v1** (2026-07-22), mirroring the face/plates submit shape. Compute envelope (`image:index` / `image:index:results`) is **v1-FROZEN** — see [`../requirements/IMAGE_INDEX_COMPUTE.md`](../requirements/IMAGE_INDEX_COMPUTE.md). Internal design: [`../image-index/00_DESIGN.md`](../image-index/00_DESIGN.md).
+Redis submit-intake **v1.1** (2026-07-23 — additive `images`/`image_id` alias; base v1 2026-07-22). **v1.2 in flight:** the advisory `image:index:progress` leg (§2B) + compute's `image_url`→`source_url` echo, both additive + built on the compute side in parallel (thread `thr_mrpk005r`)., mirroring the face/plates submit shape. Compute envelope (`image:index` / `image:index:results`) is **v1-FROZEN** — see [`../requirements/IMAGE_INDEX_COMPUTE.md`](../requirements/IMAGE_INDEX_COMPUTE.md). Internal design: [`../image-index/00_DESIGN.md`](../image-index/00_DESIGN.md).

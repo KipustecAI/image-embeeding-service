@@ -139,6 +139,30 @@ class ImageIndexService:
         """True for None, non-str, or whitespace-only strings."""
         return value is None or not (isinstance(value, str) and value.strip())
 
+    # ── v1.1 wire-vocabulary convergence (additive, non-breaking) ──────────
+    # face / plates / analysis all use `images:[{image_url, image_id}]` as the
+    # portfolio standard so a new enrichment target is almost pure config for a
+    # coordinator. We keep our native `items`/`item_id` AND accept `images`/
+    # `image_id` as aliases; native wins if both are present. (docs/apis §1.)
+
+    @staticmethod
+    def extract_items(payload: dict):
+        """The submitted list: prefer ``items``, fall back to ``images``.
+
+        Returns whatever is present (possibly ``None`` / non-list) — the caller
+        validates the shape.
+        """
+        items = payload.get("items")
+        return items if items is not None else payload.get("images")
+
+    @staticmethod
+    def item_id_of(item: dict):
+        """A per-item id: prefer ``item_id``, fall back to ``image_id``."""
+        if not isinstance(item, dict):
+            return None
+        v = item.get("item_id")
+        return v if v is not None else item.get("image_id")
+
     @classmethod
     def _validate_submit(cls, payload: dict, *, n_cap: int) -> str | None:
         """TIER-2 guards (bindable-but-rejected). Returns an error string or None.
@@ -151,7 +175,7 @@ class ImageIndexService:
         """
         if cls._is_blank(payload.get("external_id")):
             return "missing external_id"
-        items = payload.get("items")
+        items = cls.extract_items(payload)  # items | images (v1.1 alias)
         if not isinstance(items, list) or len(items) == 0:
             return "batch has no items"
         if len(items) > n_cap:
@@ -159,8 +183,8 @@ class ImageIndexService:
         for i, item in enumerate(items):
             if not isinstance(item, dict):
                 return f"item {i} is not an object"
-            if cls._is_blank(item.get("item_id")):
-                return f"item {i} missing item_id"
+            if cls._is_blank(cls.item_id_of(item)):
+                return f"item {i} missing item_id/image_id"
             url = item.get("image_url")
             if cls._is_blank(url) or not str(url).strip().lower().startswith(
                 ("http://", "https://")
@@ -188,7 +212,7 @@ class ImageIndexService:
         if error is not None:
             return None, False, error
 
-        items = payload["items"]
+        items = self.extract_items(payload)  # items | images (v1.1 alias)
         async with get_session() as session:
             repo = ImageIndexRepository(session)
             batch, created = await repo.create_or_get_batch(
@@ -214,7 +238,7 @@ class ImageIndexService:
         invariant exempts ``status=='error'`` batches (00_DESIGN §8, N2).
         Returns a detached snapshot for the ``image_batch.failed`` payload.
         """
-        items = payload.get("items")
+        items = self.extract_items(payload)  # items | images (v1.1 alias)
         submitted = len(items) if isinstance(items, list) else 0
         async with get_session() as session:
             repo = ImageIndexRepository(session)
@@ -343,9 +367,12 @@ class ImageIndexService:
         # ── 1/2: per-item upsert + collect embedded vectors ──────────────────
         for item in results:
             item_index = int(item["item_index"])
-            item_ref = item.get("item_id") or ""
+            item_ref = self.item_id_of(item) or ""  # item_id | image_id (v1.1)
             status = item.get("status")
-            source_url = item.get("source_url")  # not in the v1 results wire → None
+            # v1.1: compute now echoes the input URL as `image_url` on every
+            # disposition (empty string if the item omitted it). Persist it as
+            # source_url; fall back to a legacy `source_url` field. "" → None.
+            source_url = item.get("image_url") or item.get("source_url") or None
             qdrant_point_id = None
 
             if status == ImageIndexResultStatus.EMBEDDED:
