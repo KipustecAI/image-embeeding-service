@@ -14,6 +14,16 @@ Chronological append-only record of meaningful events in the wiki and the system
 
 ---
 
+## [2026-07-23] verification | image-index **v1.1 + v1.2 VERIFIED LIVE in prod** — docs handed to dw-offline
+
+Both sides deployed (compute `a087582`, our v1.1/v1.2 `f279a95`). Ran the e2e skill against the live prod pipeline:
+- **v1.1 source_url + image_id** ✅ — gateway read returned `source_url:"https://storage.lookia.mx/.../kept_000002.png"` per embedded item + `image_id` alongside `item_ref`. batch `36de210e`.
+- **v1.1 submit alias + v1.2 progress** ✅ — a 22-item batch submitted via **`images:[{image_url, image_id}]`** (the family-standard alias) minted + embedded; `image:index:progress` emitted the exact designed profile: `stage=downloading processed=0/22` → `stage=embedding` `4→8→12→16→20→22/22` (monotonic, `processed` terminal-only, download-phase render from `stage` confirmed). batch `5a08326a`. Reconciliation held.
+
+Extended `scripts/test_e2e_image_index.py` with `--progress`/`--count`/`--alias` modes (submit N items via the alias + tail `image:index:progress` + lifecycle) — the skill now covers all of v1/v1.1/v1.2. Docs bumped to verified-live: `IMAGE_INDEX_SUBMIT.md` §2B (progress) + the v1.1 alias note, `IMAGE_INDEX_API.md` source_url note.
+
+**Handed dw-offline the two contracts** (`sig_mrxyccbx`, ABS paths to `docs/apis/IMAGE_INDEX_SUBMIT.md` + `IMAGE_INDEX_API.md`) so they finalize their integration docs + **close the `target="image"` task** — they can now drop their translation adapter (send `images`/`image_id` directly) and wire the progress consumer with the stage-aware render. Only remaining gate for live traffic: detection-worker crop-fix `c45b72e` deploy.
+
 ## [2026-07-23] ship | image-index **v1.1 + v1.2 CLOSED both sides** — source_url populated, progress stream locked
 
 `image-embedding-compute` over-delivered (`sig_mrx2kjg2`): confirmed the bilateral smoke (batches `3d998aac` + `0e3dcb9d`, 2→2→0 both) AND shipped **both** compute-side asks already.

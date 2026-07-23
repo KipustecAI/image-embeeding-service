@@ -228,10 +228,11 @@ item row per submitted; each `embedded` item carries a `qdrant_point_id`. End-to
 `scripts/test_e2e_image_index.py` (skill: `image-index-e2e`).
 
 > **Note:** `source_url` was `null` in base v1 (the compute results wire didn't echo the image URL).
-> **v1.1 populates it** — `image-embedding-compute` now echoes `image_url` on every result and we
-> persist it as `source_url` (both on the reference row and in the Qdrant point payload). Older v1
-> batches keep `null`; batches embedded after the v1.1 deploy carry the URL. (The example above
-> predates the echo, hence `null`.)
+> **v1.1 populates it — ✅ verified live 2026-07-23** — `image-embedding-compute` echoes `image_url`
+> on every result and we persist it as `source_url` (both on the reference row and in the Qdrant point
+> payload); the `image_id` alias is present alongside `item_ref`. A post-deploy read returned e.g.
+> `source_url: "https://storage.lookia.mx/lucam-assets/kept_000002.png"` on each embedded item. Older
+> pre-deploy batches keep `null` (the example above predates the echo, hence `null`).
 
 ## 8. Version
 

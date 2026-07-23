@@ -43,6 +43,7 @@ SUBMIT_STREAM = "image:index:submit"
 DISPATCH_STREAM = "image:index"
 RESULTS_STREAM = "image:index:results"
 LIFECYCLE_STREAM = "image_batch:raw"
+PROGRESS_STREAM = "image:index:progress"  # v1.2 advisory (compute-emitted, >=20 items)
 COMPUTE_GROUP = "image-index-compute-workers"  # compute's group on image:index
 
 
@@ -167,19 +168,65 @@ def http_get(url: str, api_key: str, timeout: int = 30):
         return None, str(e)
 
 
-def submit(r, user_id: str, external_id: str, client_ref: str, urls: list[str]) -> None:
-    items = [{"image_url": u, "item_id": f"crop-{i}"} for i, u in enumerate(urls)]
+def build_items(urls: list[str], count: int, alias: bool) -> list[dict]:
+    """N items, URLs replicated round-robin. `alias` → images/image_id (v1.1)."""
+    n = count or len(urls)
+    id_key = "image_id" if alias else "item_id"
+    return [{"image_url": urls[i % len(urls)], id_key: f"crop-{i}"} for i in range(n)]
+
+
+def submit(r, user_id, external_id, client_ref, items, *, alias: bool = False) -> None:
+    list_key = "images" if alias else "items"  # v1.1 vocabulary alias
     payload = {
         "user_id": user_id,
         "client_batch_ref": client_ref,
         "external_id": external_id,
         "source_ref": "image-index-e2e",
-        "items": items,
+        list_key: items,
     }
     msg_id = r.xadd(SUBMIT_STREAM, {"event_type": "image.index.submit", "payload": json.dumps(payload)})
     print("── SUBMIT (IMAGE_INDEX_SUBMIT.md) ──")
-    print(f"  XADD {SUBMIT_STREAM} msg={msg_id}")
+    print(f"  XADD {SUBMIT_STREAM} msg={msg_id}  ({list_key}/{'image_id' if alias else 'item_id'} vocab)")
     print(f"  external_id={external_id}  client_batch_ref={client_ref}  items={len(items)}")
+
+
+def watch_progress_and_lifecycle(r, external_id, attempts=90, interval=2.0):
+    """v1.2: tail image:index:progress + image_batch:raw for OUR external_id.
+
+    Reports every progress frame (stage/processed/total) and the terminal
+    lifecycle. progress is keyed on batch_id (learned from image_batch.created).
+    """
+    print("── WATCH PROGRESS (image:index:progress) + LIFECYCLE (image_batch:raw) ──")
+    last = {LIFECYCLE_STREAM: "0-0", PROGRESS_STREAM: "$"}  # progress: only new frames
+    batch_id = None
+    frames = 0
+    terminal = {"image_batch.completed", "image_batch.failed"}
+    for _ in range(attempts):
+        entries = r.xread(last, count=500, block=int(interval * 1000))
+        for stream, msgs in entries or []:
+            for msg_id, fields in msgs:
+                last[stream] = msg_id
+                try:
+                    p = json.loads(fields.get("payload", "{}"))
+                except Exception:
+                    continue
+                et = fields.get("event_type")
+                if stream == LIFECYCLE_STREAM:
+                    if p.get("external_id") != external_id:
+                        continue
+                    if et == "image_batch.created":
+                        batch_id = p.get("batch_id")
+                        print(f"  lifecycle {et}  batch_id={batch_id} status={p.get('status')}")
+                    elif et in terminal:
+                        print(f"  lifecycle {et}  status={p.get('status')} counts={p.get('counts')}")
+                        print(f"  → progress frames seen: {frames}")
+                        return p, frames
+                elif stream == PROGRESS_STREAM and batch_id and p.get("batch_id") == batch_id:
+                    frames += 1
+                    print(f"  progress  stage={p.get('stage'):<11} "
+                          f"processed={p.get('processed')}/{p.get('total')} "
+                          f"embedded={p.get('embedded_so_far')} failed={p.get('failed_so_far')}")
+    return None, frames
 
 
 def poll(gateway: str, api_key: str, external_id: str, attempts: int = 40, interval: float = 2.0):
@@ -248,6 +295,12 @@ def main() -> int:
     ap.add_argument("--groups", action="store_true", help="only check consumer-group preconditions")
     ap.add_argument("--redis-only", action="store_true",
                     help="submit + watch image_batch:raw lifecycle (no gateway/API key needed)")
+    ap.add_argument("--progress", action="store_true",
+                    help="v1.2: submit a batch + tail image:index:progress + lifecycle (no key needed)")
+    ap.add_argument("--count", type=int, default=0,
+                    help="number of items to submit (URLs replicated round-robin; default = #urls)")
+    ap.add_argument("--alias", action="store_true",
+                    help="v1.1: submit with the images/image_id vocabulary alias")
     ap.add_argument("urls", nargs="*", help="image URLs (default: data/image_urls.text)")
     args = ap.parse_args()
 
@@ -265,13 +318,37 @@ def main() -> int:
     if not groups_ok:
         return _fail("compute group not live — submitting now would drop the dispatch. Aborting.")
 
+    # ── v1.2 progress mode: submit >=20 items + tail image:index:progress ──
+    if args.progress:
+        user_id = args.user_id or str(uuid.uuid4())
+        urls = read_urls(args.urls)
+        count = args.count or 22  # default >= IMAGE_INDEX_PROGRESS_MIN_BATCH=20
+        items = build_items(urls, count, args.alias)
+        client_ref = f"{args.external_id}-{uuid.uuid4().hex[:8]}"
+        print(f"\ntenant={user_id}  items={len(items)}  (progress mode; need >=20 for frames)\n")
+        submit(r, user_id, args.external_id, client_ref, items, alias=args.alias)
+        print("  (watching for compute progress frames + terminal…)\n")
+        term, frames = watch_progress_and_lifecycle(r, args.external_id)
+        if term is None:
+            return _fail("no terminal lifecycle seen — batch stuck or trimmed")
+        counts = term.get("counts", {})
+        recon = counts.get("submitted", 0) == counts.get("embedded", 0) + counts.get("failed", 0)
+        prog_ok = frames > 0 if len(items) >= 20 else True
+        print(f"\nbatch_id = {term.get('batch_id')}")
+        print(f"reconciliation ok: {recon} | progress frames ({len(items)} items): "
+              f"{frames} {'(expected >=1)' if len(items) >= 20 else '(none expected <20)'}")
+        ok = recon and prog_ok
+        print("\nRESULT:", "PASS ✅" if ok else "FAIL ❌")
+        return 0 if ok else 1
+
     # ── Redis-only mode: submit + watch the lifecycle stream, no gateway needed ──
     if args.redis_only:
         user_id = args.user_id or str(uuid.uuid4())
         urls = read_urls(args.urls)
+        items = build_items(urls, args.count, args.alias)
         client_ref = f"{args.external_id}-{uuid.uuid4().hex[:8]}"
-        print(f"\ntenant={user_id}  urls={len(urls)}  (Redis-only — no gateway READ)\n")
-        submit(r, user_id, args.external_id, client_ref, urls)
+        print(f"\ntenant={user_id}  items={len(items)}  (Redis-only — no gateway READ)\n")
+        submit(r, user_id, args.external_id, client_ref, items, alias=args.alias)
         print("  (waiting for compute + land…)\n")
         term = watch_lifecycle(r, args.external_id)
         if term is None:
@@ -292,9 +369,10 @@ def main() -> int:
         return _fail("no --user-id — must equal the tenant your API key resolves to, or the READ 404s")
 
     urls = read_urls(args.urls)
+    items = build_items(urls, args.count, args.alias)
     client_ref = f"{args.external_id}-{uuid.uuid4().hex[:8]}"
-    print(f"\nGateway={args.gateway}  tenant={args.user_id}  urls={len(urls)}\n")
-    submit(r, args.user_id, args.external_id, client_ref, urls)
+    print(f"\nGateway={args.gateway}  tenant={args.user_id}  items={len(items)}\n")
+    submit(r, args.user_id, args.external_id, client_ref, items, alias=args.alias)
     print("  (waiting for compute + land…)\n")
     time.sleep(3)
     code, body = poll(args.gateway, args.api_key, args.external_id)

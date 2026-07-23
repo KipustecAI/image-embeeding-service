@@ -48,11 +48,12 @@ Envelope: flat hash `{event_type: "image.index.submit", payload: <json string>}`
 
 > `item_index` is **minted by us** from the 0-based submit order — do **not** send it.
 
-> **v1.1 vocabulary alias (additive, non-breaking):** for parity with the face / plates / analysis
-> targets, the submit payload also accepts the portfolio-standard **`images:[{image_url, image_id}]`**
-> as an alias for `items:[{image_url, item_id}]`. Send either; if both are present the native
-> `items`/`item_id` wins. `image_id` is echoed back on the result as **both** `item_ref` and `image_id`
-> (same value). New integrations may use whichever the rest of the family uses.
+> **v1.1 vocabulary alias (additive, non-breaking) — ✅ verified live 2026-07-23:** for parity with the
+> face / plates / analysis targets, the submit payload also accepts the portfolio-standard
+> **`images:[{image_url, image_id}]`** as an alias for `items:[{image_url, item_id}]`. Send either; if
+> both are present the native `items`/`item_id` wins. `image_id` is echoed back on the result as
+> **both** `item_ref` and `image_id` (same value). A real batch submitted via `images`/`image_id`
+> minted + embedded correctly. New integrations may use whichever the rest of the family uses.
 
 **Example (Python `redis`):**
 ```python
@@ -161,9 +162,12 @@ cursors, zero contention). Mirrors plates' `…:progress` and face's `face:index
 > download, compute can add a separate `download_processed` field — coordinate on `thr_mrpk005r` before
 > building the consumer.)
 
-> 🟢 **Status: v1.2 shipped by `image-embedding-compute`** (thread `thr_mrpk005r`). Field names above are
-> **final**. Until you point a consumer at it, rely on the `image_batch:raw` lifecycle + a stale-batch
-> watchdog (recommended ≥ ~960 s, just outside our reaper's 900 s backstop).
+> ✅ **Status: v1.2 LIVE + verified in prod (2026-07-23).** Field names above are **final**. A real
+> 22-item batch produced the exact designed profile — one `stage=downloading processed=0/22` heartbeat,
+> then `stage=embedding` frames climbing `4→8→12→16→20→22 / 22` (monotonic; `processed` stayed 0 through
+> the download phase, confirming the render semantic above). Until you point a consumer at it, rely on
+> the `image_batch:raw` lifecycle + a stale-batch watchdog (recommended ≥ ~960 s, just outside our
+> reaper's 900 s backstop).
 
 ---
 
