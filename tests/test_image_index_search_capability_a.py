@@ -411,8 +411,14 @@ def test_external_ids_within_cap_ok():
 # ── 503 gate + IDOR 404 (M5) ──────────────────────────────────────────────────
 
 
-async def test_search_gate_503_when_flag_off():
-    # Default settings → image_index_search_enabled is False.
+async def test_search_gate_503_when_flag_off(monkeypatch):
+    from src.infrastructure.config import get_settings
+
+    # Explicitly flag-off (default is now True) with the repo available, so the
+    # 503 is caused by the flag alone — the flag-off path stays under test.
+    monkeypatch.setattr(get_settings(), "image_index_search_enabled", False)
+    monkeypatch.setattr(ii_router, "_search_repo_available", True)
+    monkeypatch.setattr(ii_router, "_search_stream_producer", object())
     with pytest.raises(Exception) as ei:
         await ii_router.require_image_index_search_enabled()
     assert getattr(ei.value, "status_code", None) == 503

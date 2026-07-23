@@ -65,6 +65,30 @@ Run it with `dangerouslyDisableSandbox: true` (it reaches the remote Redis + gat
 reads Redis creds from `.env`, XADDs the submit, waits, polls `by-external-id?include_items=true` to a
 terminal status, checks the invariants, and prints the `batch_id` to hand to compute.
 
+## 2C. Search + blacklist cross-ref legs (Cap A / Cap B — `02_SEARCH_DESIGN.md`)
+
+Once `IMAGE_INDEX_SEARCH_ENABLED=true` and some batches are indexed (§2), the runner also drives the
+two new capabilities. Full plan + expected results: [`../../docs/image-index/03_TEST_PLAN.md`](../../docs/image-index/03_TEST_PLAN.md).
+
+```bash
+# Cap A — async search-by-image over external_ids (self-match ≈ 1.0), + live-Qdrant persistence check
+IMAGE_INDEX_API_KEY=$KEY python3 scripts/test_e2e_image_index.py --search \
+  --user-id <tenant> --query "$IMG_A" --external-ids "$E1,$E2" --verify-qdrant
+
+# Cap B — GPU-free blacklist cross-reference (asserts ZERO embed-stream growth = no compute)
+IMAGE_INDEX_API_KEY=$KEY python3 scripts/test_e2e_image_index.py --xref \
+  --user-id <tenant> --entry-id <blacklist_entry_id> --external-ids "$E1,$E2"
+```
+- `--search` submits the query through the gateway, polls to terminal, checks the **self-match ≥ 0.9** and
+  that every match is **scoped to the given `external_ids`**. `--verify-qdrant` counts the stored
+  `image_index_embeddings` points + confirms the `model_version` stamp (read-only, `.env` `QDRANT_*`).
+- `--xref` calls the sync cross-reference and **proves GPU-free** by asserting `image:index` +
+  `evidence:search` stream lengths are unchanged across the call.
+- Create the blacklist entry first (§7 of the test plan): `POST …/images/blacklist` → `…/{id}/references`
+  → poll `INDEXED`, then pass the entry id to `--xref`.
+- **DB persistence** for Cap A is already proven by the `GET /search/{id}/matches` read (it reads
+  `search_matches` from Postgres); `--verify-qdrant` covers the vector side.
+
 ## 3. Manual flow (if you want to drive it by hand)
 
 ```bash

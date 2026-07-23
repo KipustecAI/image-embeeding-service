@@ -197,11 +197,15 @@ class Settings(BaseSettings):
     )  # reaper cadence
 
     # ── Image-index SEARCH + blacklist cross-ref (ADDITIVE, ISOLATED, gated-OFF) ──
-    # Full spec: docs/image-index/02_SEARCH_DESIGN.md §2. All default False /
-    # AND-gated with image_index_enabled at wiring time. Threshold reuses the
-    # existing blacklist_match_threshold (0.85) — no new threshold knob.
+    # Full spec: docs/image-index/02_SEARCH_DESIGN.md §2. AND-gated with
+    # image_index_enabled at wiring time (the deps only wire inside that block).
+    # Threshold reuses the existing blacklist_match_threshold (0.85).
+    # image_index_search_enabled defaults TRUE: search-by-image (Cap A) + the
+    # blacklist cross-reference REST (Cap B) are prod-standard, not an opt-in
+    # toggle — no env var needed. The auto-hook below stays default-False until
+    # report-generation signs off on the additive image:blacklist_match fields.
     image_index_search_enabled: bool = Field(  # Capability A (async search-by-image)
-        False, validation_alias="IMAGE_INDEX_SEARCH_ENABLED"
+        True, validation_alias="IMAGE_INDEX_SEARCH_ENABLED"
     )
     image_index_blacklist_xref_enabled: bool = Field(  # Capability B REST endpoint (v1)
         False, validation_alias="IMAGE_INDEX_BLACKLIST_XREF_ENABLED"

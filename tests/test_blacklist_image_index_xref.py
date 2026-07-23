@@ -481,12 +481,14 @@ def rest_client():
 HEADERS = {"X-User-Id": "owner-1", "X-User-Role": "user"}
 
 
-def test_rest_503_when_search_disabled():
-    """No override → the real gate 503s (flag defaults off)."""
+def test_rest_503_when_search_disabled(monkeypatch):
+    """Explicitly flag-off (default is now True) → the real gate 503s."""
     from fastapi.testclient import TestClient
 
+    from src.infrastructure.config import get_settings
     from src.main import app
 
+    monkeypatch.setattr(get_settings(), "image_index_search_enabled", False)
     app.dependency_overrides.clear()
     client = TestClient(app)
     r = client.post(
