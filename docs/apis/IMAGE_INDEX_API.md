@@ -81,8 +81,8 @@ Poll until `status` is terminal: `completed`, `completed_with_errors`, or `error
 | Field | Type | Description |
 |---|---|---|
 | `item_ref` | string | **your `item_id`** (or `image_id`), echoed |
-| `image_id` | string | **v1.1 alias** of `item_ref` — same value, for parity with face/plates/analysis |
-| `source_url` | string \| null | the submitted image URL |
+| `image_id` | string | alias of `item_ref` — same value, for parity with face/plates/analysis |
+| `source_url` | string | the submitted image URL, echoed on **every** item — including failed ones (so a `download_failed` row still tells you which URL failed). `null` only in the rare case the caller omitted a URL. |
 | `item_index` | int | position in the submitted array (0-based) |
 | `status` | string | `embedded`｜`download_failed`｜`decode_failed`｜`no_result` |
 | `qdrant_point_id` | string \| null | stable vector id (deterministic; safe to store). Set iff `embedded`. |
@@ -112,13 +112,13 @@ curl "https://api.lookia.mx/api/v1/embedding/image-index/results/49c7861d-…?in
   "completed_at": "2026-07-22T20:31:19.241892",
   "error_message": null,
   "items": [
-    { "item_ref": "3551", "source_url": "https://storage.lookia.mx/.../crop_000.png",
+    { "item_ref": "3551", "image_id": "3551", "source_url": "https://storage.lookia.mx/.../crop_000.png",
       "item_index": 0, "status": "embedded",
       "qdrant_point_id": "16d1a741-…", "duplicate_of_index": null, "error_message": null },
-    { "item_ref": "3552", "source_url": "https://storage.lookia.mx/.../crop_001.png",
+    { "item_ref": "3552", "image_id": "3552", "source_url": "https://storage.lookia.mx/.../crop_001.png",
       "item_index": 1, "status": "embedded",
       "qdrant_point_id": "8b3d55b7-…", "duplicate_of_index": null, "error_message": null },
-    { "item_ref": "3553", "source_url": "https://storage.lookia.mx/.../crop_002.png",
+    { "item_ref": "3553", "image_id": "3553", "source_url": "https://storage.lookia.mx/.../crop_002.png",
       "item_index": 2, "status": "download_failed",
       "qdrant_point_id": null, "duplicate_of_index": null, "error_message": "http 404" }
   ]
@@ -190,49 +190,49 @@ curl "https://api.lookia.mx/api/v1/embedding/image-index/results/by-external-id/
 - **`completed_with_errors` is normal** — a bad/expired crop URL yields `download_failed` for that item; the batch still completes.
 - **`error` is batch-level only** (rejected submit, compute batch failure, reaper timeout) — never a single bad image.
 - **Idempotency:** re-submitting the same `client_batch_ref` re-binds the **same** batch (no duplicate work); a genuinely new run under the same `external_id` creates a new batch — use `?all=true` to see the history.
-- **Vectors are searchable but there is no search endpoint in v1** — `POST /api/v1/image-index/search` is deferred to v1.1; v1 stores the vectors in `image_index_embeddings` (payload-indexed on `user_id`/`external_id`/`batch_id`) and ships these read legs.
+- **Vectors are stored + searchable, but there is no query-time search *endpoint* yet** — `POST /api/v1/image-index/search` is not shipped in the current release; vectors land in `image_index_embeddings` (payload-indexed on `user_id`/`external_id`/`batch_id`) and these read legs recover them. A search endpoint is a future addition.
 
 ---
 
 ## 7. Worked example (verified in prod, 2026-07-23)
 
-Submitted 2 durable image URLs over Redis (`image:index:submit`, tenant `davis`), then recovered
-through the gateway with the tenant's API key:
+Recover a completed batch through the gateway with the tenant's API key. **This is the exact response
+shape the frontend receives** — `source_url`, `image_id`, and `qdrant_point_id` are all populated on
+each embedded item.
 
 ```bash
 # READ leg — through the gateway (Cloudflare needs a real User-Agent)
-curl -sS "https://api.lookia.mx/api/v1/embedding/image-index/results/by-external-id/e2e-gw-...?include_items=true" \
+curl -sS "https://api.lookia.mx/api/v1/embedding/image-index/results/by-external-id/<external_id>?include_items=true" \
   -H "X-API-Key: <key>" -H "User-Agent: curl/8.4.0" | python3 -m json.tool
 ```
 
 ```jsonc
 {
-  "batch_id": "0e3dcb9d-b3d6-4454-9a33-32fc46252e52",
-  "external_id": "e2e-gw-...", "client_batch_ref": "e2e-gw-...-a9f396b0",
+  "batch_id": "36de210e-32b7-49e5-9bff-518f1aafb7b4",
+  "external_id": "<external_id>", "client_batch_ref": "<client_batch_ref>",
   "status": "completed",
   "counts": { "submitted": 2, "embedded": 2, "filtered": 0, "failed": 0 },
-  "source_ref": "image-index-e2e", "created_at": "2026-07-23T03:19:55.98Z",
-  "completed_at": "2026-07-23T03:19:56.67Z", "error_message": null,
+  "source_ref": "image-index-e2e", "created_at": "2026-07-23T20:07:37.20Z",
+  "completed_at": "2026-07-23T20:07:38.74Z", "error_message": null,
   "items": [
-    { "item_ref": "crop-0", "source_url": null, "item_index": 0, "status": "embedded",
-      "qdrant_point_id": "fa2ac19e-2f11-52fe-8f4d-e9a8bf271b68", "duplicate_of_index": null, "error_message": null },
-    { "item_ref": "crop-1", "source_url": null, "item_index": 1, "status": "embedded",
-      "qdrant_point_id": "66a5b4ac-5209-5f25-93b4-4718b7c839f3", "duplicate_of_index": null, "error_message": null }
+    { "item_ref": "crop-0", "image_id": "crop-0",
+      "source_url": "https://storage.lookia.mx/lucam-assets/kept_000002.png",
+      "item_index": 0, "status": "embedded",
+      "qdrant_point_id": "df7ef3c6-70c8-5479-9265-d65d100dab1c",
+      "duplicate_of_index": null, "error_message": null },
+    { "item_ref": "crop-1", "image_id": "crop-1",
+      "source_url": "https://storage.lookia.mx/lucam-assets/kept_000001.png",
+      "item_index": 1, "status": "embedded",
+      "qdrant_point_id": "70d200ad-006d-58c2-90c9-ccbdf60c6b69",
+      "duplicate_of_index": null, "error_message": null }
   ]
 }
 ```
 
-All invariants held: terminal `completed`; `submitted == embedded + failed`; `filtered == 0`; one
-item row per submitted; each `embedded` item carries a `qdrant_point_id`. End-to-end wall time
-(submit → completed) was **< 1 s** for a 2-image batch. Reproduce with
-`scripts/test_e2e_image_index.py` (skill: `image-index-e2e`).
-
-> **Note:** `source_url` was `null` in base v1 (the compute results wire didn't echo the image URL).
-> **v1.1 populates it — ✅ verified live 2026-07-23** — `image-embedding-compute` echoes `image_url`
-> on every result and we persist it as `source_url` (both on the reference row and in the Qdrant point
-> payload); the `image_id` alias is present alongside `item_ref`. A post-deploy read returned e.g.
-> `source_url: "https://storage.lookia.mx/lucam-assets/kept_000002.png"` on each embedded item. Older
-> pre-deploy batches keep `null` (the example above predates the echo, hence `null`).
+Invariants: terminal `completed`; `submitted == embedded + failed`; `filtered == 0`; one item row per
+submitted; each `embedded` item carries a populated `source_url` + `qdrant_point_id`, and `image_id`
+mirrors `item_ref`. End-to-end wall time (submit → completed) is **< 1 s** for a small batch. Reproduce
+with `scripts/test_e2e_image_index.py` (skill: `image-index-e2e`).
 
 ## 8. Version
 
