@@ -7,28 +7,46 @@ reaper all route through here so the three surfaces can never drift
 (docs/image-index/00_DESIGN.md §4 / §8).
 
 Phase-1 scope: `terminal_status`, `counts_from_batch`, and the three payload
-builders are IMPLEMENTED and unit-tested (pure). The orchestration methods
-(`submit_batch_created`, `create_error_batch`, `land_computed`,
-`mark_error_from_compute_error`) carry the frozen SIGNATURES only —
-submit/create are wired in Phase 2, land/mark in Phase 3 (compute freeze).
+builders are IMPLEMENTED and unit-tested (pure). Phase-2 wired submit/create.
+Phase-3 (this) fills `land_computed` + `mark_error_from_compute_error` against
+the FROZEN compute wire (docs/requirements/IMAGE_INDEX_COMPUTE.md, 2026-07-22).
+
+⚠️ COMPUTE-ERROR SHAPE DIVERGENCE — read before copying the live consumers.
+`mark_error_from_compute_error` reads ``payload["batch_id"]`` +
+``payload["error_message"]`` — OUR compute contract's `compute.error` shape
+(companion §3). This is NOT the ``entity_id`` / ``entity_type`` shape the LIVE
+`embedding_results_consumer` / `search_results_consumer` use. A maintainer who
+copies a live consumer and reads ``payload["entity_id"]`` here would silently
+no-op every batch-level compute error and hang the no-HTTP coordinator. The
+dedicated stream + dedicated group make this collision-free; the divergence is
+intentional and load-bearing.
 """
 
+import base64
 import logging
 from datetime import datetime
-from typing import TYPE_CHECKING
+from uuid import UUID
 
-from ..db.models.constants import ImageIndexBatchStatus
+import numpy as np
+
+from ..db.models.constants import ImageIndexBatchStatus, ImageIndexResultStatus
+from ..db.models.image_index import ImageIndexBatch
 from ..db.repositories.image_index_repo import ImageIndexRepository
 from ..infrastructure.config import get_settings
 from ..infrastructure.database import get_session
-
-if TYPE_CHECKING:  # avoid a hard import cycle at module load
-    from ..db.models.image_index import ImageIndexBatch
 
 logger = logging.getLogger(__name__)
 
 # The one count vocabulary across DB columns / lifecycle / REST.
 COUNT_KEYS = ("submitted", "embedded", "filtered", "failed")
+
+# Compute wire constants (docs/requirements/IMAGE_INDEX_COMPUTE.md §2, FROZEN).
+# vector_encoding is a REAL field on every embedded result: assert it and
+# dead-letter an unknown encoding rather than silently misparsing the buffer.
+VECTOR_ENCODING_F32LE_B64 = "f32le_b64"
+# numpy dtype of the raw buffer: 512 × float32 LITTLE-ENDIAN.
+_VECTOR_DTYPE = "<f4"
+EMBEDDING_DIM = 512
 
 
 class ImageIndexService:
@@ -230,14 +248,225 @@ class ImageIndexService:
             repo = ImageIndexRepository(session)
             await repo.set_status(batch_id, ImageIndexBatchStatus.COMPUTING)
 
-    async def land_computed(self, session, payload: dict, *, vector_repo):
-        """Phase 3: idempotently land a compute results payload (upsert rows +
-        batched Qdrant upsert + absolute recompute + terminal-from-counts).
+    @staticmethod
+    def _decode_vector_b64(vector_b64, *, batch_uuid, item_index) -> list[float]:
+        """Decode a base64 f32le buffer → list[float] for Qdrant.
+
+        ``np.frombuffer(base64.b64decode(v), dtype="<f4").tolist()`` — the
+        FROZEN decode (companion §2). Bit-exact float32; no re-normalization.
+
+        Contract-boundary validation: a null buffer, a non-multiple-of-4 buffer,
+        or a wrong-dimension vector is a **dead-letter** (raise → message unacked
+        → PEL/DLQ), surfaced HERE with a labeled ``ValueError`` naming the batch +
+        item, rather than opaquely later at the Qdrant upsert or as a bare numpy
+        error. Safe either way (a bad vector never lands searchable), but this
+        makes the on-call failure legible.
         """
-        raise NotImplementedError("Phase 3 — depends on compute v1-FREEZE")
+        if vector_b64 is None:
+            raise ValueError(
+                f"land_computed: embedded item has null vector_b64 "
+                f"(batch={batch_uuid} item_index={item_index}) — dead-letter"
+            )
+        raw = base64.b64decode(vector_b64)
+        if len(raw) % 4 != 0:
+            raise ValueError(
+                f"land_computed: vector_b64 buffer is not a whole number of "
+                f"float32 ({len(raw)} bytes; batch={batch_uuid} "
+                f"item_index={item_index}) — dead-letter"
+            )
+        vector = np.frombuffer(raw, dtype=_VECTOR_DTYPE).tolist()
+        if len(vector) != EMBEDDING_DIM:
+            raise ValueError(
+                f"land_computed: decoded vector has dim {len(vector)}, expected "
+                f"{EMBEDDING_DIM} (batch={batch_uuid} item_index={item_index}) "
+                f"— dead-letter"
+            )
+        return vector
+
+    @staticmethod
+    def _coerce_batch_uuid(batch_id_raw) -> UUID | None:
+        """Parse the wire ``batch_id`` (a bare uuid string) → UUID, or None."""
+        try:
+            return UUID(str(batch_id_raw))
+        except (ValueError, TypeError, AttributeError):
+            return None
+
+    async def land_computed(self, session, payload: dict, *, vector_repo):
+        """Idempotently land an ``image.index.computed`` results payload.
+
+        The results consumer owns the ``session`` (opened + committed around this
+        call); we never open or commit one here — we mutate + flush and RETURN the
+        ``image_batch.completed`` payload for the consumer to publish AFTER commit.
+
+        Steps (00_DESIGN §5.2, invariants §8 #2/#3/#4):
+          1. For each ``results[]`` item → ``upsert_result`` by (batch_id,
+             item_index) — a redelivery overwrites the SAME row in place.
+          2. ``status=="embedded"`` → ASSERT ``vector_encoding=="f32le_b64"``
+             (unknown encoding RAISES → dead-letter, never a silent misparse),
+             decode ``vector_b64``, and collect into ONE batched
+             ``vector_repo.upsert_items(...)`` with the deterministic point-id.
+             Failures / ``no_result`` store the disposition + error_message, no
+             vector. The reference row stores the same deterministic
+             ``qdrant_point_id`` (recomputed, no Qdrant round-trip). ``filtered``
+             never fires in v1 (dedup disabled).
+          3. Recompute counts ABSOLUTELY (GROUP BY) — never ``+= n``.
+          4. Terminal via the shared ``terminal_status``: None → leave
+             'computing' + log-loud the shortfall (the reaper is the backstop);
+             else set completed | completed_with_errors.
+          5. Return the completed payload (or None: a never-minted batch_id, or a
+             not-yet-accounted batch → ACK no-op, no lifecycle publish).
+        """
+        batch_uuid = self._coerce_batch_uuid(payload.get("batch_id"))
+        if batch_uuid is None:
+            logger.error(
+                "land_computed: unparseable batch_id %r — ACK no-op",
+                payload.get("batch_id"),
+            )
+            return None
+
+        # A batch we never minted (results leg never mints) → ACK no-op.
+        batch = await session.get(ImageIndexBatch, batch_uuid)
+        if batch is None:
+            logger.warning(
+                "land_computed: batch_id %s never minted — ACK no-op", batch_uuid
+            )
+            return None
+
+        from ..infrastructure.vector_db.image_index_vector_repository import (
+            image_index_point_id,
+        )
+
+        repo = ImageIndexRepository(session)
+        results = payload.get("results") or []
+        points: list[dict] = []
+
+        # ── 1/2: per-item upsert + collect embedded vectors ──────────────────
+        for item in results:
+            item_index = int(item["item_index"])
+            item_ref = item.get("item_id") or ""
+            status = item.get("status")
+            source_url = item.get("source_url")  # not in the v1 results wire → None
+            qdrant_point_id = None
+
+            if status == ImageIndexResultStatus.EMBEDDED:
+                encoding = item.get("vector_encoding")
+                if encoding != VECTOR_ENCODING_F32LE_B64:
+                    # DEAD-LETTER: raising leaves the message unacked → PEL/DLQ.
+                    # Never silently misparse an unknown encoding.
+                    raise ValueError(
+                        f"land_computed: unknown vector_encoding {encoding!r} "
+                        f"(batch={batch_uuid} item_index={item_index}); expected "
+                        f"{VECTOR_ENCODING_F32LE_B64!r} — dead-letter"
+                    )
+                vector = self._decode_vector_b64(
+                    item.get("vector_b64"),
+                    batch_uuid=batch_uuid,
+                    item_index=item_index,
+                )
+                # Deterministic point-id — recomputed, no Qdrant round-trip; the
+                # reference row stores the SAME value (redelivery overwrites).
+                qdrant_point_id = image_index_point_id(str(batch_uuid), item_index)
+                points.append(
+                    {
+                        "batch_id": str(batch_uuid),
+                        "item_index": item_index,
+                        "vector": vector,
+                        "user_id": batch.user_id,
+                        "external_id": batch.external_id,
+                        "item_ref": item_ref,
+                        "source_url": source_url,
+                    }
+                )
+
+            await repo.upsert_result(
+                batch_id=batch_uuid,
+                item_index=item_index,
+                item_ref=item_ref,
+                status=status,
+                source_url=source_url,
+                qdrant_point_id=qdrant_point_id,
+                duplicate_of_index=item.get("duplicate_of_index"),
+                error_message=item.get("error_message"),
+            )
+
+        # ── Batched Qdrant upsert (ONE call) — before we terminalize ─────────
+        # A Qdrant failure RAISES so the message is NOT acked (PEL → XCLAIM
+        # retry); the re-land is idempotent (deterministic point-ids + upsert).
+        if points:
+            ok = await vector_repo.upsert_items(points)
+            if not ok:
+                raise RuntimeError(
+                    f"land_computed: Qdrant upsert_items failed for batch "
+                    f"{batch_uuid} ({len(points)} points) — not acking"
+                )
+
+        # ── 3: absolute recompute (GROUP BY, never += n) ─────────────────────
+        counts = await repo.recompute_counts(batch_uuid)
+        # Mirror the freshly-recomputed counters onto the ORM object so the
+        # lifecycle payload is authoritative (recompute_counts also writes them
+        # in real code; this keeps the payload correct + self-contained).
+        batch.submitted_count = counts.get("submitted", 0)
+        batch.embedded_count = counts.get("embedded", 0)
+        batch.filtered_count = counts.get("filtered", 0)
+        batch.failed_count = counts.get("failed", 0)
+
+        # ── 4: terminal-from-counts via the single shared helper ─────────────
+        terminal = self.terminal_status(counts)
+        if terminal is None:
+            # Unaccounted — a result is still outstanding. Do NOT terminalize;
+            # log LOUD (invariant §8 #3) and let the reaper be the backstop.
+            logger.warning(
+                "land_computed shortfall: batch %s accounted "
+                "embedded=%d+filtered=%d+failed=%d < submitted=%d — staying "
+                "'computing' (reaper backstop)",
+                batch_uuid,
+                counts.get("embedded", 0),
+                counts.get("filtered", 0),
+                counts.get("failed", 0),
+                counts.get("submitted", 0),
+            )
+            return None
+
+        # Terminalize (ORM mutation + flush idiom, matching create_error_batch /
+        # mark_failed). The consumer commits; we only build the payload.
+        now = datetime.utcnow()
+        batch.status = terminal
+        batch.completed_at = now
+        batch.updated_at = now
+        return self.build_batch_completed_payload(batch)
 
     async def mark_error_from_compute_error(self, session, payload: dict):
-        """Phase 3: terminalize a batch as 'error' from a compute.error payload
-        keyed on batch_id + error_message (NOT the live entity_id/entity_type shape).
+        """Terminalize a batch as 'error' from a ``compute.error`` payload.
+
+        Reads ``payload["batch_id"]`` + ``payload["error_message"]`` — OUR
+        contract shape (companion §3), NOT the live entity_id/entity_type shape
+        (see the module docstring). Last-writer-wins: even an already-terminal
+        batch is overwritten to 'error'. The consumer owns + commits the session;
+        we mutate + flush and RETURN the ``image_batch.failed`` payload.
+
+        A never-minted / unparseable ``batch_id`` → return None (ACK no-op).
         """
-        raise NotImplementedError("Phase 3 — depends on compute v1-FREEZE")
+        batch_uuid = self._coerce_batch_uuid(payload.get("batch_id"))
+        if batch_uuid is None:
+            logger.error(
+                "mark_error_from_compute_error: unparseable batch_id %r — ACK no-op",
+                payload.get("batch_id"),
+            )
+            return None
+
+        batch = await session.get(ImageIndexBatch, batch_uuid)
+        if batch is None:
+            logger.warning(
+                "mark_error_from_compute_error: batch_id %s never minted — ACK no-op",
+                batch_uuid,
+            )
+            return None
+
+        error_message = payload.get("error_message")
+        now = datetime.utcnow()
+        batch.status = ImageIndexBatchStatus.ERROR
+        batch.error_message = (error_message or "")[: self.ERROR_MESSAGE_MAX]
+        batch.completed_at = now
+        batch.updated_at = now
+        await session.flush()
+        return self.build_batch_failed_payload(batch)

@@ -32,6 +32,9 @@ from src.db.repositories import EmbeddingRequestRepository, SearchRequestReposit
 from src.infrastructure.config import get_settings
 from src.infrastructure.database import engine, get_session
 from src.infrastructure.entity_taxonomy import resolve_entity_label
+from src.infrastructure.vector_db.image_index_vector_repository import (
+    ImageIndexVectorRepository,
+)
 from src.infrastructure.vector_db.qdrant_repository import QdrantVectorRepository
 from src.services.blacklist_embed_service import set_blacklist_vector_repo
 from src.services.blacklist_match_service import set_blacklist_match_stream_producer
@@ -58,6 +61,22 @@ from src.streams.embedding_results_consumer import (
     set_storage_uploader,
     set_stream_producer,
     set_vector_repo,
+)
+from src.streams.image_index_reaper import (
+    reap_stuck_image_index_batches,
+    set_reaper_producer,
+)
+from src.streams.image_index_results_consumer import (
+    create_image_index_results_consumer,
+)
+from src.streams.image_index_results_consumer import (
+    set_results_event_loop as set_image_index_results_event_loop,
+)
+from src.streams.image_index_results_consumer import (
+    set_results_producer as set_image_index_results_producer,
+)
+from src.streams.image_index_results_consumer import (
+    set_results_vector_repo as set_image_index_results_vector_repo,
 )
 from src.streams.image_index_submit_consumer import (
     create_image_index_submit_consumer,
@@ -86,12 +105,15 @@ search_consumer = None
 vector_repo = None
 stream_producer = None
 image_index_submit_consumer = None
+image_index_results_consumer = None
+image_index_vector_repo = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global scheduler, embed_consumer, search_consumer, vector_repo, stream_producer
-    global image_index_submit_consumer
+    global image_index_submit_consumer, image_index_results_consumer
+    global image_index_vector_repo
 
     logger.info("Starting Image Embedding Backend...")
 
@@ -182,25 +204,62 @@ async def lifespan(app: FastAPI):
     search_consumer.start()
     logger.info("Stream consumers started (embeddings:results + search:results)")
 
-    # 5. On-demand image-index submit intake (ADDITIVE, gated — Phase 2 stub).
-    # Constructed only when IMAGE_INDEX_ENABLED (default False → this whole
-    # block is skipped: zero runtime footprint). NOT started here — cold-start
-    # ordering (00_DESIGN §5.4) requires the results consumer to start FIRST,
-    # and that lands in Phase 3. The single gated block + .start() ordering are
-    # completed then. The LIVE dispatch to image:index must not go live until
-    # the compute v1-FREEZE; IMAGE_INDEX_ENABLED is that gate.
+    # 5. On-demand image-index on-demand flow (ADDITIVE, gated — Phase 3 wiring).
+    # Constructed + started only when IMAGE_INDEX_ENABLED (default False → this
+    # whole block is skipped: zero runtime footprint, nothing new constructed or
+    # started). The LIVE dispatch to image:index must not go live until the
+    # compute v1-FREEZE; IMAGE_INDEX_ENABLED is that gate.
     if settings.image_index_enabled:
+        # Dedicated Qdrant collection — SHARES the live client (never the live
+        # QdrantVectorRepository.initialize()). The try/except is the isolation
+        # latch at the wiring level: the live vector_repo is already up, so no
+        # failure here can propagate into the live evidence/search/blacklist path
+        # (00_DESIGN §4 wiring block).
+        try:
+            image_index_vector_repo = ImageIndexVectorRepository(settings)
+            await image_index_vector_repo.initialize(vector_repo.client)
+            logger.info(
+                "Image-index collection ready (%s)",
+                settings.qdrant_collection_image_index,
+            )
+        except Exception:
+            logger.exception(
+                "Image-index Qdrant init failed — feature stays degraded, live path intact"
+            )
+            image_index_vector_repo = None
+
+        # Cold-start ordering is LOAD-BEARING (00_DESIGN §5.4): start the RESULTS
+        # consumer BEFORE the submit consumer. StreamConsumer._ensure_group creates
+        # groups at id="$", so a group only sees messages XADD'd after it exists —
+        # a fresh-mint submit dispatches to image:index and compute replies to
+        # image:index:results; if submit started first a fast reply could land
+        # before the results group and be lost.
+        set_image_index_results_event_loop(loop)
+        set_image_index_results_producer(stream_producer)
+        set_image_index_results_vector_repo(image_index_vector_repo)
+        image_index_results_consumer = create_image_index_results_consumer()
+        image_index_results_consumer.start()
+
         set_submit_event_loop(loop)
         set_submit_producer(stream_producer)
         image_index_submit_consumer = create_image_index_submit_consumer()
+        image_index_submit_consumer.start()
+
+        # Timeout reaper on the EXISTING scheduler (00_DESIGN §5.3) — configured
+        # interval, not a literal.
+        set_reaper_producer(stream_producer)
+        scheduler.add_job(
+            reap_stuck_image_index_batches,
+            IntervalTrigger(seconds=settings.image_index_reaper_interval_seconds),
+            id="image_index_reaper",
+            misfire_grace_time=30,
+        )
+
         # REST query surface (Phase 4) — the read path only needs Postgres, so it
-        # is available whenever the app is up and the flag is on. A future phase
-        # can pass available=(image_index_repo is not None) once the dedicated
-        # Qdrant repo is wired, so the router 503s in lock-step on an init failure.
+        # is available whenever the app is up and the flag is on.
         image_index_router.set_image_index_router_deps(available=True)
         logger.info(
-            "Image-index submit consumer constructed + REST query surface enabled "
-            "(consumer start deferred to Phase 3 results-first wiring)"
+            "Image-index on-demand flow ENABLED (results→submit consumers + reaper)"
         )
 
     logger.info("Image Embedding Backend ready")
@@ -216,6 +275,8 @@ async def lifespan(app: FastAPI):
         search_consumer.stop()
     if image_index_submit_consumer:
         image_index_submit_consumer.stop()
+    if image_index_results_consumer:
+        image_index_results_consumer.stop()
 
     if scheduler and scheduler.running:
         scheduler.shutdown(wait=False)
