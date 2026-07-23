@@ -1,5 +1,6 @@
 """Qdrant vector database repository implementation."""
 
+import asyncio
 import logging
 from datetime import datetime
 from uuid import UUID
@@ -435,6 +436,38 @@ class QdrantVectorRepository(VectorRepository):
             return results[0].vector
         except Exception as e:
             logger.error(f"Failed to retrieve query vector {point_id}: {e}")
+            return None
+
+    async def get_point_vector(self, point_id: str) -> list[float] | None:
+        """Fetch one point's stored vector from evidence_embeddings (§5.2).
+
+        Reads the live collection where blacklist vectors live
+        (``source_type="blacklist"``, keyed by ``qdrant_point_id``). Generalizes
+        the shipping ``retrieve_query_vector`` pattern but is
+        ``asyncio.to_thread``-wrapped (S6) because Capability B calls it from the
+        shared results-consumer loop, where a blocking ``retrieve`` would stall
+        the live embed/search handlers. (The sibling ``retrieve_query_vector`` is
+        intentionally left un-wrapped — do NOT "consistency-fix" it.)
+
+        Returns ``None`` on a missing/orphaned point; every caller must treat
+        ``None`` as skip-and-log and never pass it into a search.
+        """
+        if self.client is None:
+            logger.error("get_point_vector called before initialize()")
+            return None
+
+        def _sync():
+            return self.client.retrieve(
+                collection_name=self.collection_name,
+                ids=[point_id],
+                with_vectors=True,
+            )
+
+        try:
+            res = await asyncio.to_thread(_sync)
+            return res[0].vector if res else None
+        except Exception as e:
+            logger.error(f"get_point_vector failed ({point_id}): {e}")
             return None
 
     async def get_collection_stats(self) -> dict:

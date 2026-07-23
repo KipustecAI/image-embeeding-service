@@ -26,17 +26,25 @@ from ....application.use_cases.manage_blacklist_image import (
     BlacklistReferenceNotFound,
     ManageBlacklistImageUseCase,
 )
+from ....db.repositories.blacklist_image_repo import BlacklistImageRepository
+from ....infrastructure.config import get_settings
+from ....infrastructure.database import get_session
+from ....services.blacklist_image_index_xref import cross_reference_entry
 from ..schemas.blacklist_image import (
     AddReferenceRequest,
     AddReferenceResponse,
     BackfillResponse,
     CreateEntryRequest,
+    CrossReferenceRequest,
+    CrossReferenceResponse,
     EntryDetailResponse,
     EntryListResponse,
     EntryResponse,
     PatchEntryRequest,
     ReferenceResponse,
+    XrefMatch,
 )
+from .image_index import require_image_index_search_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -390,4 +398,72 @@ async def trigger_backfill(
         entry_id=str(entry_id),
         references_count=references_count,
         job_ids=scheduled,
+    )
+
+
+# ── Capability B — GPU-free blacklist cross-reference (02_SEARCH_DESIGN §7.3) ──
+
+
+@router.post(
+    "/image-entries/{entry_id}/cross-reference",
+    response_model=CrossReferenceResponse,
+    dependencies=[Depends(require_image_index_search_enabled)],
+)
+async def cross_reference(
+    entry_id: UUID,
+    body: CrossReferenceRequest,
+    ctx: UserContext = Depends(get_user_context),
+) -> CrossReferenceResponse:
+    """"Does this blacklisted image appear in these indexed runs?" — SYNC (§7.3).
+
+    GPU-free + bounded, so the result is returned inline (no 202/poll). Reuses the
+    entry's already-stored CLIP vectors and reverse-searches the dedicated
+    ``image_index_embeddings`` collection scoped by tenant + ``external_id``.
+
+    Status codes: ``401`` missing ``X-User-Id``; ``404`` entry not under the
+    tenant (IDOR — never 403/existence-disclosure); ``422`` bad body / over the
+    ``external_ids`` cap; ``503`` feature off or repo unavailable (the shared
+    ``require_image_index_search_enabled`` gate). A foreign/other-tenant
+    ``external_id`` is NOT an error — ``search_similar`` ANDs ``user_id`` so it
+    contributes no hits (IDOR-by-emptiness). **Event-silent in v1** (§7.4).
+    """
+    settings = get_settings()
+    owner_id = _require_user(ctx)
+    if len(body.external_ids) > settings.image_index_external_ids_cap:
+        raise HTTPException(
+            status_code=422,
+            detail=f"external_ids exceeds cap ({settings.image_index_external_ids_cap})",
+        )
+
+    # Entry-tenancy gate BEFORE any vector work — a foreign/missing entry is a 404
+    # for the entry (never 403, never 200-empty existence-disclosure). This is the
+    # only place we distinguish "no such entry" from "no matches" (200-empty).
+    async with get_session() as session:
+        repo = BlacklistImageRepository(session)
+        entry = await repo.get_entry(entry_id)
+        if entry is None or entry.user_id != owner_id:
+            raise HTTPException(status_code=404, detail="Entry not found")
+        # Resolve the threshold the core will use so the response reports it even
+        # for a zero-match run (core applies the same precedence).
+        if body.threshold is not None:
+            threshold_used = body.threshold
+        elif entry.match_threshold is not None:
+            threshold_used = entry.match_threshold
+        else:
+            threshold_used = settings.blacklist_match_threshold
+
+    matches = await cross_reference_entry(
+        user_id=owner_id,
+        entry_id=entry_id,
+        external_ids=list(body.external_ids),
+        threshold=body.threshold,
+        limit=body.max_results,
+    )
+
+    return CrossReferenceResponse(
+        entry_id=str(entry_id),
+        external_ids=list(body.external_ids),
+        threshold_used=threshold_used,
+        match_count=len(matches),
+        matches=[XrefMatch(**m) for m in matches],
     )

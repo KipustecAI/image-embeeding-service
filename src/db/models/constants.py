@@ -21,6 +21,19 @@ class SimilarityStatus:
     MATCHES_FOUND = 2
 
 
+class SearchType:
+    """Discriminator on ``search_requests`` (image-index SEARCH — 02_SEARCH_DESIGN §1).
+
+    The single canonical name set, imported by BOTH the dispatch and the
+    results consumer so the literal is never inlined twice. A mismatch would
+    fall an image-index reply through the un-tenant-scoped evidence block — a
+    cross-tenant leak, not a benign miss (must-fix M1).
+    """
+
+    EVIDENCE = "evidence"
+    IMAGE_INDEX = "image_index"
+
+
 class BlacklistEntryStatus:
     """Status of a blacklist image entry (the profile).
 

@@ -12,7 +12,26 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+# ── Capability A — async search-by-image (02_SEARCH_DESIGN §6.1) ──────────────
+
+
+class ImageIndexSearchCreate(BaseModel):
+    """POST /api/v1/image-index/search body.
+
+    ``external_ids`` is capped at ``image_index_external_ids_cap`` (200, the same
+    MatchAny bound the read leg's ``?all=200`` uses). Threshold defaults to 0.75
+    and is a required knob (§3 — cross-collection threshold reuse is comparability,
+    not a preserved operating point).
+    """
+
+    image_url: str
+    external_ids: list[str] = Field(..., min_length=1, max_length=200)
+    threshold: float = 0.75
+    max_results: int = 50
+    metadata: dict | None = None
+
 
 # ── Shared count vocabulary ──────────────────────────────────────────────────
 

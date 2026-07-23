@@ -54,9 +54,50 @@ async def _truncate_image_index_tables() -> None:
         await engine.dispose()
 
 
+async def _delete_image_index_search_rows() -> None:
+    """Row-scoped DELETE of Capability-A rows in the SHARED search tables.
+
+    02_SEARCH_DESIGN §8/S9: image-index search rows live in the shared
+    ``search_requests`` / ``search_matches`` tables, so we must NEVER TRUNCATE
+    them (that would wipe live evidence/tenant rows). Scope is strictly the
+    image-index rows: ``search_matches`` with a non-null ``external_id`` (evidence
+    matches are always NULL) and ``search_requests`` with
+    ``search_type='image_index'``. Best-effort; never raises.
+    """
+    settings = get_settings()
+    engine = create_async_engine(settings.database_url)
+    try:
+        async with engine.begin() as conn:
+            existing = (
+                await conn.execute(
+                    text(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema = 'public' AND table_name = ANY(:names)"
+                    ),
+                    {"names": ["search_requests", "search_matches"]},
+                )
+            ).scalars().all()
+            if "search_requests" not in existing:
+                return
+            # Matches first (FK to search_requests). Both predicates are
+            # image-index-only — evidence rows are never touched.
+            await conn.execute(
+                text("DELETE FROM search_matches WHERE external_id IS NOT NULL")
+            )
+            await conn.execute(
+                text("DELETE FROM search_requests WHERE search_type = 'image_index'")
+            )
+    except Exception:
+        return
+    finally:
+        await engine.dispose()
+
+
 @pytest.fixture(autouse=True)
 async def _clean_image_index_tables():
-    """Autouse: clean the image-index tables before AND after each test."""
+    """Autouse: clean the image-index tables + Cap-A rows before AND after each test."""
     await _truncate_image_index_tables()
+    await _delete_image_index_search_rows()
     yield
     await _truncate_image_index_tables()
+    await _delete_image_index_search_rows()

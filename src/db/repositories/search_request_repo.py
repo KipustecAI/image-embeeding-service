@@ -8,7 +8,7 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from ..models.constants import SearchRequestStatus, SimilarityStatus
+from ..models.constants import SearchRequestStatus, SearchType, SimilarityStatus
 from ..models.search_match import SearchMatch
 from ..models.search_request import SearchRequest
 
@@ -53,8 +53,20 @@ class SearchRequestRepository:
         max_results: int = 50,
         metadata: dict | None = None,
         stream_msg_id: str | None = None,
+        search_type: str = SearchType.EVIDENCE,
+        external_ids: list[str] | None = None,
+        status: int = SearchRequestStatus.TO_WORK,
+        processing_started_at=None,
     ) -> SearchRequest:
-        """Create new search request at status=1."""
+        """Create new search request.
+
+        Additive kwargs (02_SEARCH_DESIGN §6.2) for the image-index SEARCH
+        discriminator; every existing evidence caller is byte-identical (all
+        default to the evidence values: search_type='evidence', external_ids
+        NULL, status=TO_WORK). ``metadata=metadata`` is kept as-is — the known
+        shadow-drop is left untouched (an evidence-path change, out of scope);
+        image-index uses the real ``search_type`` / ``external_ids`` columns.
+        """
         request = SearchRequest(
             search_id=search_id,
             user_id=user_id,
@@ -63,10 +75,38 @@ class SearchRequestRepository:
             max_results=max_results,
             metadata=metadata,
             stream_message_id=stream_msg_id,
+            search_type=search_type,
+            external_ids=external_ids,
+            status=status,
+            processing_started_at=processing_started_at,
         )
         self.session.add(request)
         await self.session.flush()
         return request
+
+    async def get_by_search_id_scoped(
+        self, search_id: str, *, user_id: str, search_type: str
+    ) -> SearchRequest | None:
+        """Tenant + type-scoped fetch for the gated image-index read legs (§6.1).
+
+        A row-miss, a tenant-miss, OR a wrong-type row all resolve to None so
+        the router returns 404 with no existence disclosure (strict IDOR, M5).
+        The live unscoped ``get_by_search_id`` stays untouched.
+        """
+        query = (
+            select(SearchRequest)
+            .where(
+                and_(
+                    SearchRequest.search_id == search_id,
+                    SearchRequest.user_id == user_id,
+                    SearchRequest.search_type == search_type,
+                )
+            )
+            .options(selectinload(SearchRequest.matches))
+            .limit(1)
+        )
+        result = await self.session.execute(query)
+        return result.scalar()
 
     async def get_stale_working(self, stale_minutes: int = 10) -> list[SearchRequest]:
         """Find search requests stuck in WORKING for too long."""
@@ -83,12 +123,50 @@ class SearchRequestRepository:
     async def get_for_recalculation(
         self, hours_old: int = 2, limit: int = 20
     ) -> list[SearchRequest]:
-        """Get completed searches eligible for recalculation."""
+        """Get completed EVIDENCE searches eligible for recalculation.
+
+        The ``search_type == 'evidence'`` guard is REQUIRED (must-fix M3, ships
+        in the migration PR): without it a landed image-index row would satisfy
+        this predicate and be re-searched against ``evidence_embeddings`` (which
+        carries no user_id filter), silently overwriting its matches with
+        cross-tenant evidence data. Behavior-preserving for every existing row
+        (all legacy rows backfill to 'evidence'). Image-index recalc has its own
+        query (``get_for_image_index_recalculation``).
+        """
         cutoff = datetime.utcnow() - timedelta(hours=hours_old)
         query = (
             select(SearchRequest)
             .where(
                 and_(
+                    SearchRequest.search_type == SearchType.EVIDENCE,
+                    SearchRequest.status == SearchRequestStatus.COMPLETED,
+                    SearchRequest.similarity_status == SimilarityStatus.MATCHES_FOUND,
+                    SearchRequest.processing_completed_at < cutoff,
+                )
+            )
+            .order_by(SearchRequest.processing_completed_at.asc())
+            .limit(limit)
+        )
+        result = await self.session.execute(query)
+        return list(result.scalars().all())
+
+    async def get_for_image_index_recalculation(
+        self, hours_old: int = 2, limit: int = 20
+    ) -> list[SearchRequest]:
+        """Completed IMAGE-INDEX searches eligible for recalculation (§6.4).
+
+        Mirrors ``get_for_recalculation`` but keyed on the image-index
+        discriminator — delivers recalculation-against-new-index for free:
+        images landing later under the same ``external_ids`` fold in on the next
+        pass. Rewritten against ``image_index_embeddings`` scoped by user_id +
+        external_ids, never the evidence collection.
+        """
+        cutoff = datetime.utcnow() - timedelta(hours=hours_old)
+        query = (
+            select(SearchRequest)
+            .where(
+                and_(
+                    SearchRequest.search_type == SearchType.IMAGE_INDEX,
                     SearchRequest.status == SearchRequestStatus.COMPLETED,
                     SearchRequest.similarity_status == SimilarityStatus.MATCHES_FOUND,
                     SearchRequest.processing_completed_at < cutoff,

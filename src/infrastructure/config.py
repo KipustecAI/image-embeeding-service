@@ -196,6 +196,26 @@ class Settings(BaseSettings):
         60, validation_alias="IMAGE_INDEX_REAPER_INTERVAL_SECONDS"
     )  # reaper cadence
 
+    # ── Image-index SEARCH + blacklist cross-ref (ADDITIVE, ISOLATED, gated-OFF) ──
+    # Full spec: docs/image-index/02_SEARCH_DESIGN.md §2. All default False /
+    # AND-gated with image_index_enabled at wiring time. Threshold reuses the
+    # existing blacklist_match_threshold (0.85) — no new threshold knob.
+    image_index_search_enabled: bool = Field(  # Capability A (async search-by-image)
+        False, validation_alias="IMAGE_INDEX_SEARCH_ENABLED"
+    )
+    image_index_blacklist_xref_enabled: bool = Field(  # Capability B REST endpoint (v1)
+        False, validation_alias="IMAGE_INDEX_BLACKLIST_XREF_ENABLED"
+    )
+    image_index_blacklist_autocheck_enabled: bool = Field(  # Capability B auto-hook (v1.1)
+        False, validation_alias="IMAGE_INDEX_BLACKLIST_AUTOCHECK_ENABLED"
+    )
+    image_index_xref_limit: int = Field(  # per-search top_k
+        50, validation_alias="IMAGE_INDEX_XREF_LIMIT"
+    )
+    image_index_external_ids_cap: int = Field(  # MatchAny bound (A + B)
+        200, validation_alias="IMAGE_INDEX_EXTERNAL_IDS_CAP"
+    )
+
     @property
     def image_index_collection(self) -> str:
         """Read-only alias for `qdrant_collection_image_index` (§2 canonical name)."""

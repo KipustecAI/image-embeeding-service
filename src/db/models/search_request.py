@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Float, Integer, String, Text
+from sqlalchemy import CheckConstraint, Column, DateTime, Float, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
@@ -19,6 +19,14 @@ class SearchRequest(Base):
     image_url = Column(Text, nullable=False)
     status = Column(Integer, nullable=False, default=1, index=True)
     similarity_status = Column(Integer, default=1)
+
+    # Discriminator (image-index SEARCH — 02_SEARCH_DESIGN §1/§4). Backfills to
+    # 'evidence' via server_default; every evidence caller stays byte-identical.
+    search_type = Column(
+        String(32), nullable=False, server_default="evidence", index=True
+    )
+    # Capability-A query external_ids list — NULL for every evidence row (§4, M4).
+    external_ids = Column(JSONB, nullable=True)
 
     # Search parameters
     threshold = Column(Float, default=0.75)
@@ -49,6 +57,13 @@ class SearchRequest(Base):
         "SearchMatch",
         back_populates="search_request",
         cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "search_type IN ('evidence','image_index')",
+            name="ck_search_requests_search_type",
+        ),
     )
 
     def __repr__(self):

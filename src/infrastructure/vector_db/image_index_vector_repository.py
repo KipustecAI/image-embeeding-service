@@ -19,6 +19,7 @@ embed/search handlers.
 
 import asyncio
 import logging
+import math
 import uuid
 
 from qdrant_client import QdrantClient
@@ -27,6 +28,7 @@ from qdrant_client.models import (
     Distance,
     FieldCondition,
     Filter,
+    MatchAny,
     MatchValue,
     PointStruct,
     UpdateStatus,
@@ -39,6 +41,37 @@ logger = logging.getLogger(__name__)
 
 # FROZEN — changing this re-keys every point. See docs/image-index/00_DESIGN.md §4.
 IMAGE_INDEX_NS = uuid.uuid5(uuid.NAMESPACE_URL, "lookia.image-index.v1")
+
+# CLIP variant identifier stamped into every indexed point's payload (S1, §3).
+# Mirrors the same literal the blacklist path already writes
+# (blacklist_embed_service._MODEL_VERSION) so Capability-B can compare a blacklist
+# point's model_version against the indexed point's and log-and-skip on mismatch.
+_MODEL_VERSION = "clip-vit-b-32"
+
+
+def _is_finite_nonzero(vec) -> bool:
+    """True only for a real, comparable CLIP vector.
+
+    Cosine is undefined for a zero/NaN vector (§3): a failed embed that leaked
+    into a stored point — or a zero/NaN query vector — would produce garbage
+    rather than an empty result. Guards `search_similar` (and the Cap-B xref
+    core) so we skip-and-log instead of issuing the Qdrant search. Returns False
+    for empty, None-bearing, non-numeric, NaN/inf, or all-zero vectors.
+    """
+    if not vec:
+        return False
+    total = 0.0
+    for x in vec:
+        if x is None:
+            return False
+        try:
+            f = float(x)
+        except (TypeError, ValueError):
+            return False
+        if not math.isfinite(f):
+            return False
+        total += f * f
+    return total > 0.0
 
 # ids-only, face-style payload: the 512-D vector IS the payload. Keyword indices
 # ONLY on the filter fields; item_index/item_ref/source_url are stored-but-unindexed.
@@ -154,6 +187,9 @@ class ImageIndexVectorRepository:
                 "item_index": item_index,
                 "item_ref": p.get("item_ref"),
                 "source_url": p.get("source_url"),
+                # Additive model-version stamp (S1, §3) — enables the Cap-B
+                # cross-collection same-space guard. Reuses the blacklist literal.
+                "model_version": _MODEL_VERSION,
             }
             structs.append(PointStruct(id=point_id, vector=p["vector"], payload=payload))
 
@@ -205,3 +241,114 @@ class ImageIndexVectorRepository:
         except Exception as e:  # noqa: BLE001
             logger.error("Error deleting image-index batch %s: %s", batch_id, e)
             return False
+
+    async def search_similar(
+        self,
+        query_vector,
+        *,
+        user_id: str,
+        external_ids: list[str] | None = None,
+        batch_id: str | None = None,
+        top_k: int = 50,
+        threshold: float = 0.75,
+    ) -> list[dict]:
+        """Cosine search over the dedicated collection under a CLOSED filter (§5.1).
+
+        The filter is fixed (no free-form dict → no metadata-allow-list surface):
+        - ``user_id`` ALWAYS in ``must`` (MatchValue) — the IDOR enforcement point
+          at the vector layer; a foreign/cross-tenant ``external_id`` yields zero
+          intersection → ``[]``.
+        - ``external_ids`` (list → MatchAny) and ``batch_id`` (scalar → MatchValue)
+          optional; all three are keyword payload indices so the filter is
+          index-served.
+        Distance is already COSINE on the collection; ``score_threshold`` prunes.
+        A degenerate zero/NaN ``query_vector`` is skipped-and-logged → ``[]`` (§3, S4).
+        Returns ``list[dict]`` (not ``SearchResult``, which forces evidence UUIDs).
+        """
+        if self.client is None:
+            logger.error("search_similar called before initialize()")
+            return []
+        vec = query_vector.tolist() if hasattr(query_vector, "tolist") else list(query_vector)
+        if not _is_finite_nonzero(vec):
+            logger.warning(
+                "search_similar skipped: zero/NaN query vector (user=%s)", user_id
+            )
+            return []
+
+        must = [FieldCondition(key="user_id", match=MatchValue(value=str(user_id)))]
+        if external_ids:
+            must.append(
+                FieldCondition(
+                    key="external_id", match=MatchAny(any=[str(e) for e in external_ids])
+                )
+            )
+        if batch_id:
+            must.append(
+                FieldCondition(key="batch_id", match=MatchValue(value=str(batch_id)))
+            )
+        query_filter = Filter(must=must)
+
+        def _sync():
+            return self.client.search(
+                collection_name=self.collection_name,
+                query_vector=vec,
+                limit=top_k,
+                score_threshold=threshold,
+                query_filter=query_filter,
+                with_payload=True,
+            )
+
+        try:
+            hits = await asyncio.to_thread(_sync)
+        except Exception as e:  # noqa: BLE001 — match live repo: log-and-empty, never raise
+            logger.error("image-index search failed (user=%s): %s", user_id, e)
+            return []
+        return [self._hit_to_match(h) for h in hits]
+
+    @staticmethod
+    def _hit_to_match(hit) -> dict:
+        """Map a Qdrant hit → a pure-payload match dict (no DB join, §5.1).
+
+        Every field is a payload key ``upsert_items`` writes. ``image_id`` falls
+        back to the point-id when ``item_ref`` is null (NOT-NULL fallback, §4);
+        ``model_version`` is surfaced for the Cap-B cross-collection guard (§3).
+        """
+        p = hit.payload or {}
+        point_id = str(hit.id)
+        return {
+            "external_id": p.get("external_id"),
+            "batch_id": p.get("batch_id"),
+            "item_index": p.get("item_index"),
+            "item_ref": p.get("item_ref"),
+            "image_id": p.get("item_ref") or point_id,  # NOT NULL fallback (§4)
+            "source_url": p.get("source_url"),
+            "score": hit.score,
+            "qdrant_point_id": point_id,
+            "user_id": p.get("user_id"),
+            "model_version": p.get("model_version"),  # B cross-collection guard (§3)
+        }
+
+    async def get_point_vector(self, point_id: str) -> list[float] | None:
+        """Fetch one indexed point's stored vector from this collection (§5.2).
+
+        ``asyncio.to_thread``-wrapped (S6) — runs on the shared consumer loop.
+        Returns ``None`` on a missing/orphaned point; every caller must treat
+        ``None`` as skip-and-log and never pass it into ``search_similar``.
+        """
+        if self.client is None:
+            logger.error("get_point_vector called before initialize()")
+            return None
+
+        def _sync():
+            return self.client.retrieve(
+                collection_name=self.collection_name,
+                ids=[point_id],
+                with_vectors=True,
+            )
+
+        try:
+            res = await asyncio.to_thread(_sync)
+            return res[0].vector if res else None
+        except Exception as e:  # noqa: BLE001
+            logger.error("get_point_vector failed (%s): %s", point_id, e)
+            return None

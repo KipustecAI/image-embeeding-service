@@ -136,6 +136,26 @@ class BlacklistImageRepository:
         )
         return int(result.scalar() or 0)
 
+    async def list_active_indexed_entries(self, user_id: str) -> list[BlacklistImageEntry]:
+        """Active + INDEXED entries for a tenant — the auto-hook iteration set.
+
+        Mirrors ``count_active_by_user``'s predicate (active AND status==INDEXED)
+        so the Capability-B auto-on-land hook (02_SEARCH_DESIGN §7.4) iterates
+        exactly the entries the fast-exit counted. Oldest-first for stable order.
+        """
+        result = await self.session.execute(
+            select(BlacklistImageEntry)
+            .where(
+                and_(
+                    BlacklistImageEntry.user_id == user_id,
+                    BlacklistImageEntry.active.is_(True),
+                    BlacklistImageEntry.status == BlacklistEntryStatus.INDEXED,
+                )
+            )
+            .order_by(BlacklistImageEntry.created_at.asc())
+        )
+        return list(result.scalars().all())
+
     async def update_entry_status(self, entry_id: UUID, status: int) -> BlacklistImageEntry | None:
         entry = await self.get_entry(entry_id)
         if entry is None:

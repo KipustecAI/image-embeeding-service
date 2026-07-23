@@ -37,6 +37,10 @@ from src.infrastructure.vector_db.image_index_vector_repository import (
 )
 from src.infrastructure.vector_db.qdrant_repository import QdrantVectorRepository
 from src.services.blacklist_embed_service import set_blacklist_vector_repo
+from src.services.blacklist_image_index_xref import (
+    set_xref_evidence_repo,
+    set_xref_image_index_repo,
+)
 from src.services.blacklist_match_service import set_blacklist_match_stream_producer
 from src.services.blacklist_reverse_search import (
     set_reverse_search_scheduler,
@@ -50,6 +54,9 @@ from src.services.safety_nets import (
     cleanup_old_requests,
     recalculate_searches,
     recover_stale_working,
+)
+from src.services.safety_nets import (
+    set_image_index_vector_repo as set_safety_nets_image_index_vector_repo,
 )
 from src.services.safety_nets import (
     set_vector_repo as set_safety_nets_vector_repo,
@@ -86,6 +93,7 @@ from src.streams.image_index_submit_consumer import (
 from src.streams.producer import StreamProducer
 from src.streams.search_results_consumer import (
     create_search_results_consumer,
+    set_search_image_index_vector_repo,
     set_search_results_event_loop,
     set_search_vector_repo,
 )
@@ -258,6 +266,28 @@ async def lifespan(app: FastAPI):
         # REST query surface (Phase 4) — the read path only needs Postgres, so it
         # is available whenever the app is up and the flag is on.
         image_index_router.set_image_index_router_deps(available=True)
+
+        # ── Image-index SEARCH (Capability A, 02_SEARCH_DESIGN §6.3 wiring) ──
+        # Additive: wire the dedicated repo into the SHARED (always-live) search
+        # results consumer + the recalc safety net, and the gated search routes.
+        # The results-consumer branch is inert until a metadata.search_type=
+        # 'image_index' reply arrives; passing a None repo (failed init) makes
+        # that branch terminalize ERROR rather than fall through (M8).
+        set_search_image_index_vector_repo(image_index_vector_repo)
+        set_safety_nets_image_index_vector_repo(image_index_vector_repo)
+        image_index_router.set_image_index_search_deps(
+            stream_producer=stream_producer,
+            available=image_index_vector_repo is not None,
+        )
+
+        # ── Blacklist cross-reference (Capability B, 02_SEARCH_DESIGN §7.5) ──
+        # GPU-free: the live QdrantVectorRepository holds the blacklist reference
+        # vectors (evidence_embeddings); the dedicated repo holds the indexed
+        # images. Both already-built singletons — fully additive, no live path
+        # touched. The REST route 503s until image_index_search_enabled; the
+        # auto-on-land hook stays inert until image_index_blacklist_autocheck_enabled.
+        set_xref_evidence_repo(vector_repo)
+        set_xref_image_index_repo(image_index_vector_repo)
         logger.info(
             "Image-index on-demand flow ENABLED (results→submit consumers + reaper)"
         )

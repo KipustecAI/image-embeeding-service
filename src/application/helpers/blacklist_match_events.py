@@ -21,9 +21,16 @@ from typing import Any, Literal
 IMAGE_BLACKLIST_MATCH_EVENT_TYPE = "image.blacklist_match"
 
 # Whether the match fired from the inline path (new evidence matched
-# existing blacklist) or the reverse-search path (new blacklist matched
-# historical evidence). Receiver can phrase alerts differently.
-BlacklistMatchTrigger = Literal["inline", "reverse_search"]
+# existing blacklist), the reverse-search path (new blacklist matched
+# historical evidence), or the image-index cross-reference path (Capability B —
+# blacklist matched an on-demand indexed image). Receiver can phrase alerts
+# differently. The ``image_index_xref`` value is additive (S8) — evidence
+# consumers that switch on this must tolerate the new member.
+BlacklistMatchTrigger = Literal["inline", "reverse_search", "image_index_xref"]
+
+# Which collection the matched image came from. ``"evidence"`` (default) is the
+# byte-identical existing path; ``"image_index"`` is Capability B (§7.4).
+BlacklistMatchTarget = Literal["evidence", "image_index"]
 
 
 def build_blacklist_match_event(
@@ -51,6 +58,13 @@ def build_blacklist_match_event(
     similarity_score: float,
     threshold_used: float,
     trigger: BlacklistMatchTrigger,
+    # ── Image-index cross-reference (Capability B, additive — §7.4/S8) ──
+    # Defaults keep the evidence-path event BYTE-IDENTICAL: the three keys are
+    # omitted entirely when match_target == "evidence", so inline/reverse_search
+    # payloads are unchanged. They appear only for the image_index_xref path.
+    match_target: BlacklistMatchTarget = "evidence",
+    external_id: str | None = None,
+    batch_id: str | None = None,
     # ── Optional testing hook ──
     matched_at: datetime | None = None,
 ) -> dict[str, Any]:
@@ -67,7 +81,7 @@ def build_blacklist_match_event(
     if matched_at is None:
         matched_at = datetime.utcnow()
 
-    return {
+    event = {
         "user_id": user_id,
         "blacklist_entry_id": blacklist_entry_id,
         "blacklist_entry_name": blacklist_entry_name,
@@ -90,3 +104,13 @@ def build_blacklist_match_event(
         "trigger": trigger,
         "matched_at": matched_at.isoformat() + "Z",
     }
+
+    # Additive image-index cross-reference fields (§7.4/S8). Omitted entirely for
+    # the evidence path so inline/reverse_search events stay byte-identical; the
+    # report-generation consumer sees them ONLY on image_index_xref events.
+    if match_target != "evidence":
+        event["match_target"] = match_target
+        event["external_id"] = external_id
+        event["batch_id"] = batch_id
+
+    return event

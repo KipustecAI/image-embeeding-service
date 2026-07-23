@@ -5,7 +5,9 @@ Creates SearchRequest DB rows and notifies the search BatchTrigger.
 
 import asyncio
 import logging
+from datetime import datetime
 
+from ..db.models.constants import SearchRequestStatus, SearchType
 from ..db.repositories import SearchRequestRepository
 from ..infrastructure.config import get_settings
 from ..infrastructure.database import get_session
@@ -69,6 +71,24 @@ async def _process_search_created(payload: dict, message_id: str):
     max_results = payload.get("max_results", 50)
     search_metadata = payload.get("metadata")
 
+    # Discriminator-awareness (defense in depth, M6). For image-index the POST
+    # commits the row BEFORE publishing, so check_duplicate no-ops here; this
+    # only fires on a lost-POST-commit race — and MUST type the row correctly
+    # (an image-index row mis-created as 'evidence' would later be re-searched
+    # against evidence_embeddings by recalc, a cross-tenant overwrite).
+    meta = search_metadata or {}
+    is_image_index = meta.get("search_type") == SearchType.IMAGE_INDEX
+    if is_image_index:
+        search_type = SearchType.IMAGE_INDEX
+        external_ids = meta.get("external_ids")
+        create_status = SearchRequestStatus.WORKING
+        started_at = datetime.utcnow()
+    else:
+        search_type = SearchType.EVIDENCE
+        external_ids = None
+        create_status = SearchRequestStatus.TO_WORK
+        started_at = None
+
     async with get_session() as session:
         repo = SearchRequestRepository(session)
 
@@ -85,6 +105,10 @@ async def _process_search_created(payload: dict, message_id: str):
             max_results=max_results,
             metadata=search_metadata,
             stream_msg_id=message_id,
+            search_type=search_type,
+            external_ids=external_ids,
+            status=create_status,
+            processing_started_at=started_at,
         )
         await session.commit()
 

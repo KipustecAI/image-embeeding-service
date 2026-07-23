@@ -208,10 +208,14 @@ async def test_lifespan_disabled_constructs_and_starts_nothing_image_index(
     assert main.image_index_vector_repo is None
 
 
-def test_app_imports_at_24_routes():
-    # Phase 3 adds NO routes — the REST surface is mounted unconditionally in
-    # Phase 4 and 503s when the flag is off.
-    assert len(main.app.routes) == 24
+def test_app_imports_at_28_routes():
+    # Phase 4 mounted the 2 read legs; the image-index SEARCH increment
+    # (02_SEARCH_DESIGN Capability A) added 3 gated routes (POST /search,
+    # GET /search/{id}, GET /search/{id}/matches). Capability B (§7.3) adds 1
+    # more gated route — POST /api/v1/blacklist/image-entries/{id}/cross-reference
+    # on the unconditionally-mounted blacklist router (503 when the search flag is
+    # off). 24 → 27 → 28.
+    assert len(main.app.routes) == 28
 
 
 if __name__ == "__main__":  # pragma: no cover

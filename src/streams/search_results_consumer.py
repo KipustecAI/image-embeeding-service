@@ -25,6 +25,7 @@ from ..application.helpers.weapon_filters import build_weapon_filter_conditions
 from ..db.models.constants import (
     BlacklistReferenceStatus,
     SearchRequestStatus,
+    SearchType,
     SimilarityStatus,
 )
 from ..db.models.search_match import SearchMatch
@@ -32,6 +33,7 @@ from ..db.repositories import SearchRequestRepository
 from ..db.repositories.blacklist_image_repo import BlacklistImageRepository
 from ..infrastructure.config import get_settings
 from ..infrastructure.database import get_session
+from ..infrastructure.vector_db.image_index_vector_repository import _is_finite_nonzero
 from ..services.dw_publisher_service import (
     publish_blacklist_image_reference,
     publish_image_search_matches,
@@ -44,6 +46,10 @@ settings = get_settings()
 
 _event_loop: asyncio.AbstractEventLoop | None = None
 _vector_repo = None
+# Dedicated image-index collection repo (Capability A). Wired ONLY inside the
+# gated lifespan block; None when the feature is off → the branch marks ERROR
+# and never falls through to the evidence search (M8).
+_image_index_vector_repo = None
 
 
 def set_search_results_event_loop(loop: asyncio.AbstractEventLoop):
@@ -54,6 +60,11 @@ def set_search_results_event_loop(loop: asyncio.AbstractEventLoop):
 def set_search_vector_repo(repo):
     global _vector_repo
     _vector_repo = repo
+
+
+def set_search_image_index_vector_repo(repo):
+    global _image_index_vector_repo
+    _image_index_vector_repo = repo
 
 
 def create_search_results_consumer() -> StreamConsumer:
@@ -104,6 +115,15 @@ async def _process_search_result(payload: dict, message_id: str):
 
     if purpose == "blacklist_embed":
         await _process_blacklist_embed_result(payload, message_id)
+        return
+
+    # Image-index SEARCH (Capability A) — pure additive EARLY-RETURN keyed on the
+    # discriminator in the echoed metadata (M1/M8). When absent, the evidence +
+    # blacklist_embed blocks below are byte-identical. The whole handler wraps
+    # its own try/except → marks only the image-index row ERROR, never re-raises.
+    meta = payload.get("metadata") or {}
+    if meta.get("search_type") == SearchType.IMAGE_INDEX:
+        await _process_image_index_search_result(payload, message_id)
         return
 
     threshold = payload.get("threshold", 0.75)
@@ -250,6 +270,157 @@ async def _process_search_result(payload: dict, message_id: str):
             publish_image_search_request("image_search.failed", failed_request)
 
 
+async def _mark_image_index_search_error(
+    search_id: str, message: str
+) -> None:
+    """Terminalize an image-index search row to ERROR. Never re-raises (M8)."""
+    try:
+        async with get_session() as session:
+            repo = SearchRequestRepository(session)
+            request = await repo.get_by_search_id(search_id)
+            if request is not None:
+                request.status = SearchRequestStatus.ERROR
+                request.error_message = message[:500]
+                await session.commit()
+    except Exception as e:  # noqa: BLE001
+        logger.error("Failed to mark image-index search %s ERROR: %s", search_id, e)
+
+
+async def _process_image_index_search_result(payload: dict, message_id: str):
+    """Land a Capability-A query vector against ``image_index_embeddings`` (§6.3).
+
+    A near-clone of the evidence block pointed at the dedicated collection,
+    ENTIRELY wrapped in try/except that marks the row ERROR and returns cleanly
+    (never re-raises), so it can never regress the shared live consumer (M8).
+    Searches scoped by ``owner_id`` (from metadata.user_id) + ``external_ids``;
+    lands matches with ``evidence_id = item_ref or qdrant_point_id`` (M2).
+    """
+    search_id = payload.get("search_id", "")
+    meta = payload.get("metadata") or {}
+    user_id = meta.get("user_id") or payload.get("user_id", "")
+    vector = payload.get("vector")
+    threshold = payload.get("threshold", 0.75)
+    max_results = payload.get("max_results", 50)
+    external_ids = meta.get("external_ids")
+
+    try:
+        # Guard 1: repo not wired (flag off / degraded) → ERROR. NEVER fall
+        # through to the evidence search (that would be a cross-tenant leak).
+        if _image_index_vector_repo is None:
+            logger.error(
+                "image-index search %s: dedicated repo not wired — marking ERROR",
+                search_id,
+            )
+            await _mark_image_index_search_error(
+                search_id, "image-index repo unavailable"
+            )
+            return
+
+        # Guard 2: degenerate query vector (§3/S4).
+        if vector is None or not _is_finite_nonzero(vector):
+            logger.warning(
+                "image-index search %s: zero/NaN query vector — marking ERROR",
+                search_id,
+            )
+            await _mark_image_index_search_error(search_id, "degenerate query vector")
+            return
+
+        query_vector = np.array(vector, dtype=np.float32)
+
+        matches = await _image_index_vector_repo.search_similar(
+            query_vector,
+            user_id=user_id,
+            external_ids=external_ids,
+            top_k=max_results,
+            threshold=threshold,
+        )
+
+        total_matches = len(matches)
+        similarity_status = (
+            SimilarityStatus.MATCHES_FOUND
+            if total_matches > 0
+            else SimilarityStatus.NO_MATCHES
+        )
+
+        # Store the query vector on the LIVE repo (search_queries collection) so
+        # the image-index recalc branch can re-search for free. Idempotent.
+        query_point_id = str(uuid_mod.uuid4())
+        if _vector_repo is not None:
+            await _vector_repo.store_query_vector(
+                point_id=query_point_id,
+                vector=query_vector.tolist(),
+                search_id=search_id,
+            )
+
+        async with get_session() as session:
+            repo = SearchRequestRepository(session)
+            request = await repo.get_by_search_id(search_id)
+            if request is None:
+                # Row should already exist (POST created it) — defensively
+                # create it correctly typed so it can never become 'evidence'.
+                request = await repo.create_request(
+                    search_id=search_id,
+                    user_id=user_id,
+                    image_url="(computed by GPU service)",
+                    threshold=threshold,
+                    max_results=max_results,
+                    metadata=payload.get("metadata"),
+                    stream_msg_id=message_id,
+                    search_type=SearchType.IMAGE_INDEX,
+                    external_ids=external_ids,
+                    status=SearchRequestStatus.WORKING,
+                    processing_started_at=datetime.utcnow(),
+                )
+
+            request.status = SearchRequestStatus.COMPLETED
+            request.similarity_status = similarity_status
+            request.total_matches = total_matches
+            request.processing_completed_at = datetime.utcnow()
+            request.qdrant_query_point_id = query_point_id
+
+            # Clear old matches if this is a re-land / recalculation.
+            if request.matches:
+                request.matches.clear()
+                await session.flush()
+
+            for m in matches:
+                point_id = m.get("qdrant_point_id")
+                # NOT-NULL fallback — search_matches.evidence_id is NOT NULL and
+                # item_ref is nullable; image_id already carries the fallback (M2).
+                evidence_id = m.get("image_id") or point_id
+                session.add(
+                    SearchMatch(
+                        search_request_id=request.id,
+                        evidence_id=str(evidence_id),
+                        camera_id=None,
+                        similarity_score=m.get("score"),
+                        image_url=m.get("source_url"),
+                        external_id=m.get("external_id"),
+                        match_metadata={
+                            "batch_id": m.get("batch_id"),
+                            "item_index": m.get("item_index"),
+                            "item_ref": m.get("item_ref"),
+                            "qdrant_point_id": point_id,
+                            "search_type": SearchType.IMAGE_INDEX,
+                        },
+                    )
+                )
+            await session.commit()
+
+        logger.info(
+            "image-index search %s: %d matches stored (threshold=%s)",
+            search_id,
+            total_matches,
+            threshold,
+        )
+
+    except Exception as e:  # noqa: BLE001 — never re-raise into the shared consumer
+        logger.error(
+            "Failed to process image-index search %s: %s", search_id, e, exc_info=True
+        )
+        await _mark_image_index_search_error(search_id, str(e))
+
+
 async def _process_blacklist_embed_result(payload: dict, message_id: str):
     """Hand off a blacklist_embed result to the embed service.
 
@@ -375,5 +546,12 @@ async def _process_compute_error(payload: dict):
 
     logger.error(f"Compute error for search {entity_id}: {error}")
 
-    if failed_request_snapshot is not None:
+    # DW-silent for image-index searches (02_SEARCH_DESIGN §6.4): the DW pipeline
+    # only knows the evidence-shaped image_search.* lifecycle. Emitting an
+    # image_search.failed for an image-index row would leak an evidence-shaped
+    # event (with null evidence fields) to report-generation. Status stays ERROR
+    # either way; only the DW publish is gated to the evidence path.
+    if failed_request_snapshot is not None and (
+        getattr(failed_request_snapshot, "search_type", None) != SearchType.IMAGE_INDEX
+    ):
         publish_image_search_request("image_search.failed", failed_request_snapshot)

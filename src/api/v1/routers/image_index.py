@@ -23,12 +23,15 @@ Design invariants enforced here:
 from __future__ import annotations
 
 import logging
-from uuid import UUID
+from datetime import datetime
+from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from ....api.dependencies import UserContext, get_user_context
+from ....db.models.constants import SearchRequestStatus, SearchType
 from ....db.models.image_index import ImageIndexBatch, ImageIndexResult
+from ....db.repositories import SearchRequestRepository
 from ....db.repositories.image_index_repo import ImageIndexRepository
 from ....infrastructure.config import get_settings
 from ....infrastructure.database import get_session
@@ -37,10 +40,16 @@ from ..schemas.image_index import (
     BatchCounts,
     BatchListResponse,
     BatchResultResponse,
+    ImageIndexSearchCreate,
     ItemResult,
 )
 
 logger = logging.getLogger(__name__)
+
+# Presentation names — kept value-identical with src/main.py's evidence surface
+# (02_SEARCH_DESIGN §6.1: both surfaces must agree). Not the integer DB machine.
+STATUS_NAMES = {1: "pending", 2: "working", 3: "completed", 4: "error"}
+SIMILARITY_NAMES = {1: "no_matches", 2: "matches_found"}
 
 
 # ── Feature gate ─────────────────────────────────────────────────────────────
@@ -78,6 +87,45 @@ async def require_image_index_enabled() -> None:
     if not _repo_available:
         raise HTTPException(
             status_code=503, detail="Image-index repository unavailable"
+        )
+
+
+# ── Capability A search gate (02_SEARCH_DESIGN §6.1) ─────────────────────────
+
+# Wired from main.py's gated lifespan block ONLY when the dedicated image-index
+# Qdrant repo initialized. Stays None/False otherwise → search routes 503.
+_search_stream_producer = None
+_search_repo_available: bool = False
+
+
+def set_image_index_search_deps(*, stream_producer, available: bool) -> None:
+    """Wire the Capability-A search surface from main.py (§6.3 wiring).
+
+    Called only inside ``if settings.image_index_enabled:`` after the dedicated
+    repo + stream producer exist. With the feature OFF it is never called and
+    ``require_image_index_search_enabled`` short-circuits to 503.
+    """
+    global _search_stream_producer, _search_repo_available
+    _search_stream_producer = stream_producer
+    _search_repo_available = available
+
+
+async def require_image_index_search_enabled() -> None:
+    """503 gate for the three Capability-A routes (§6.1, M5).
+
+    503 when ``image_index_search_enabled`` is off OR the dedicated repo / stream
+    producer was never wired (image_index_repo is None). AND-gated with
+    ``image_index_enabled`` implicitly: the deps are only wired inside the gated
+    lifespan block, so an off feature leaves ``_search_repo_available`` False.
+    """
+    settings = get_settings()
+    if not settings.image_index_search_enabled:
+        raise HTTPException(
+            status_code=503, detail="Image-index search is disabled"
+        )
+    if not _search_repo_available or _search_stream_producer is None:
+        raise HTTPException(
+            status_code=503, detail="Image-index search repository unavailable"
         )
 
 
@@ -216,3 +264,147 @@ async def get_results_by_external_id(
         else []
     )
     return _batch_to_response(batch, items)
+
+
+# ── Capability A — async search-by-image over external_ids (§6.1) ────────────
+
+
+@router.post(
+    "/search",
+    status_code=202,
+    dependencies=[Depends(require_image_index_search_enabled)],
+)
+async def create_image_index_search(
+    body: ImageIndexSearchCreate = Body(...),
+    ctx: UserContext = Depends(get_user_context),
+) -> dict:
+    """Submit an async search-by-image over a set of ``external_ids`` → 202.
+
+    Mirrors the evidence ``POST /api/v1/search`` shape but (a) scopes by
+    ``ctx.owner_id`` (S5), (b) tags the compute round-trip with the discriminator
+    + query external_ids inside ``metadata`` (M1/M6), and (c) inserts the row at
+    WORKING + processing_started_at=now so the reaper can terminalize it (M7).
+    """
+    settings = get_settings()
+    owner_id = _require_user(ctx)
+    if len(body.external_ids) > settings.image_index_external_ids_cap:
+        raise HTTPException(
+            status_code=422,
+            detail=f"external_ids exceeds cap ({settings.image_index_external_ids_cap})",
+        )
+
+    search_id = str(uuid4())
+    metadata = dict(body.metadata or {})
+    metadata["search_type"] = SearchType.IMAGE_INDEX  # discriminator survives round-trip
+    metadata["external_ids"] = list(body.external_ids)
+    metadata["user_id"] = owner_id  # tenant scope (always) — read back by the consumer
+
+    async with get_session() as session:
+        repo = SearchRequestRepository(session)
+        await repo.create_request(
+            search_id=search_id,
+            user_id=owner_id,
+            image_url=body.image_url,
+            threshold=body.threshold,
+            max_results=body.max_results,
+            metadata=metadata,
+            search_type=SearchType.IMAGE_INDEX,
+            external_ids=list(body.external_ids),
+            status=SearchRequestStatus.WORKING,
+            processing_started_at=datetime.utcnow(),
+        )
+        await session.commit()  # commit-before-publish (M6)
+
+    _search_stream_producer.publish(
+        stream=settings.stream_evidence_search,
+        event_type="search.created",
+        payload={
+            "search_id": search_id,
+            "user_id": owner_id,
+            "image_url": body.image_url,
+            "threshold": body.threshold,
+            "max_results": body.max_results,
+            "metadata": metadata,
+        },
+    )
+
+    return {
+        "search_id": search_id,
+        "status": "pending",
+        "message": f"Search submitted, poll /api/v1/image-index/search/{search_id}",
+    }
+
+
+@router.get(
+    "/search/{search_id}",
+    dependencies=[Depends(require_image_index_search_enabled)],
+)
+async def get_image_index_search(
+    search_id: str,
+    ctx: UserContext = Depends(get_user_context),
+) -> dict:
+    """Tenant + type-scoped status (strict IDOR — 404 on any miss, M5/§9)."""
+    owner_id = _require_user(ctx)
+    async with get_session() as session:
+        repo = SearchRequestRepository(session)
+        req = await repo.get_by_search_id_scoped(
+            search_id, user_id=owner_id, search_type=SearchType.IMAGE_INDEX
+        )
+        if req is None:
+            raise HTTPException(status_code=404, detail="Search not found")
+        return {
+            "search_id": req.search_id,
+            "status": STATUS_NAMES.get(req.status, "unknown"),
+            "similarity_status": SIMILARITY_NAMES.get(req.similarity_status, "unknown"),
+            "total_matches": req.total_matches,
+            "threshold": req.threshold,
+            "max_results": req.max_results,
+            "external_ids": req.external_ids,
+            "image_url": req.image_url,
+            "created_at": req.created_at.isoformat() if req.created_at else None,
+            "completed_at": req.processing_completed_at.isoformat()
+            if req.processing_completed_at
+            else None,
+            "error": req.error_message,
+        }
+
+
+@router.get(
+    "/search/{search_id}/matches",
+    dependencies=[Depends(require_image_index_search_enabled)],
+)
+async def get_image_index_search_matches(
+    search_id: str,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    ctx: UserContext = Depends(get_user_context),
+) -> dict:
+    """Paginated matches for an image-index search (same tenant+type gate)."""
+    owner_id = _require_user(ctx)
+    async with get_session() as session:
+        repo = SearchRequestRepository(session)
+        req = await repo.get_by_search_id_scoped(
+            search_id, user_id=owner_id, search_type=SearchType.IMAGE_INDEX
+        )
+        if req is None:
+            raise HTTPException(status_code=404, detail="Search not found")
+
+        matches = await repo.get_matches(req.id, limit=limit, offset=offset)
+        total = await repo.count_matches(req.id)
+        return {
+            "search_id": search_id,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "matches": [
+                {
+                    "image_id": m.evidence_id,
+                    "source_url": m.image_url,
+                    "score": m.similarity_score,
+                    "external_id": m.external_id,
+                    "batch_id": (m.match_metadata or {}).get("batch_id"),
+                    "item_index": (m.match_metadata or {}).get("item_index"),
+                }
+                for m in matches
+            ],
+        }

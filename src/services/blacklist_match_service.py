@@ -21,6 +21,7 @@ import logging
 
 from ..application.helpers.blacklist_match_events import (
     IMAGE_BLACKLIST_MATCH_EVENT_TYPE,
+    BlacklistMatchTarget,
     BlacklistMatchTrigger,
     build_blacklist_match_event,
 )
@@ -54,6 +55,9 @@ async def publish_blacklist_match(
     similarity_score: float,
     threshold_used: float,
     trigger: BlacklistMatchTrigger,
+    match_target: BlacklistMatchTarget = "evidence",
+    external_id: str | None = None,
+    batch_id: str | None = None,
 ) -> None:
     """Build and publish one ``image.blacklist_match`` event.
 
@@ -85,6 +89,9 @@ async def publish_blacklist_match(
         similarity_score=similarity_score,
         threshold_used=threshold_used,
         trigger=trigger,
+        match_target=match_target,
+        external_id=external_id,
+        batch_id=batch_id,
     )
 
     if _stream_producer is None:

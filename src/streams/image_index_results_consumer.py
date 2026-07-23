@@ -168,6 +168,37 @@ async def _process_computed(payload: dict, message_id: str) -> None:
         # session commits on __aexit__ (before we publish).
     if lifecycle is not None:
         _publish_lifecycle(_LIFECYCLE_COMPLETED, lifecycle)
+        # Capability-B auto-on-land hook (v1.1, §7.4) — GATED, AFTER the terminal
+        # publish, NEVER before, NEVER blocking completion visibility. The batch is
+        # already marked completed + published above; this only cross-references the
+        # tenant's active blacklist against the just-landed batch and fires
+        # fire-and-forget image:blacklist_match events. Defensive try/except so an
+        # unexpected error can never fail the handler / unack the (idempotent) land.
+        await _maybe_autocheck_blacklist(lifecycle)
+
+
+async def _maybe_autocheck_blacklist(lifecycle: dict) -> None:
+    """Gated Capability-B cross-reference of a just-landed batch (§7.4).
+
+    No-op unless ``image_index_blacklist_autocheck_enabled`` is on. Fast-exits
+    inside ``auto_cross_reference_batch`` when the tenant has no active blacklist.
+    Never raises — a match-scan failure must never regress the land path.
+    """
+    if not settings.image_index_blacklist_autocheck_enabled:
+        return
+    user_id = lifecycle.get("user_id")
+    batch_id = lifecycle.get("batch_id")
+    if not user_id or not batch_id:
+        return
+    try:
+        # Imported lazily so the flag-off land path never touches the xref module.
+        from ..services.blacklist_image_index_xref import auto_cross_reference_batch
+
+        await auto_cross_reference_batch(user_id=user_id, batch_id=batch_id)
+    except Exception as e:  # noqa: BLE001 — never block/unack the land
+        logger.error(
+            "auto-xref hook failed (user=%s batch=%s): %s", user_id, batch_id, e
+        )
 
 
 async def _process_compute_error(payload: dict, message_id: str) -> None:
