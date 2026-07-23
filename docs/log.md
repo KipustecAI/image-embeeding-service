@@ -14,6 +14,19 @@ Chronological append-only record of meaningful events in the wiki and the system
 
 ---
 
+## [2026-07-23] ship | image-index SEARCH (Cap A) + blacklist cross-ref (Cap B) BUILT (gated-OFF) — verdict SHIP, re-verified
+
+9-agent delegate-build (`wf_31f73aac-772`) to [`02_SEARCH_DESIGN.md`](image-index/02_SEARCH_DESIGN.md): 3 sequential increments → 5 audit lenses → synthesis. **Verdict SHIP.** (One audit lens — verify-rerun — died on a StructuredOutput cap; I did its job by hand.)
+
+**Built (additive, gated behind `IMAGE_INDEX_SEARCH_ENABLED` + `image_index_blacklist_autocheck_enabled`, both default False):**
+- **P1 Qdrant primitives** — `ImageIndexVectorRepository.search_similar` (user_id MatchValue AND external_id MatchAny, degenerate-vector skip), `get_point_vector` on both repos, `model_version="clip-vit-b-32"` stamp on `upsert_items`.
+- **P2 Cap A** — async `POST /api/v1/image-index/search` + `GET /search/{id}` + `/matches` on the gated router; migration `a9c1e4f7b2d8` (additive: `search_type`/`external_ids`/`external_id` columns + recalc `search_type=='evidence'` guard); discriminator-aware result consumer branch; WORKING-at-insert + reaper terminalize.
+- **P3+P3b Cap B (one task)** — `blacklist_image_index_xref.cross_reference_entry` (GPU-free), sync `POST …/image-entries/{id}/cross-reference`, gated auto-on-land hook in `_process_computed`, additive `image:blacklist_match` fields.
+
+**Hand-back re-verification (main thread — the failed lens's job):** app imports **28 routes** (24 + 3 Cap-A + 1 Cap-B); the whole `image_index|search|blacklist` suite = **223 passed / 5 skipped**; the **17 failures are ALL pre-existing infra-absence** (`OSError connect 127.0.0.1:5433` / Qdrant — root-caused, **zero regressions**); single alembic head; **live-path files pure-insertion additive (0 deletions)**; M1 spot-check confirmed one canonical `SearchType` constant (no inlined literals). **Applied the 1 medium must-fix** (DW-silent guard in `_process_compute_error` — image-index `compute.error` must NOT emit the evidence-shaped `image_search.failed` DW event) + re-verified (67 core tests green, ruff clean).
+
+**Human-required before flipping flags** (per synthesis): (1) live `alembic upgrade/downgrade` on staging + DB-integration tests vs live Postgres; (2) live Qdrant smoke confirming cross-collection cosine comparability; (3) empirical `blacklist_match_threshold` sweep before Cap-B; (4) report-generation sign-off on the additive `image:blacklist_match` fields before the autocheck hook. **Flag-flip order:** `IMAGE_INDEX_ENABLED` → `IMAGE_INDEX_SEARCH_ENABLED` (compute.error fix now applied) → `IMAGE_INDEX_BLACKLIST_AUTOCHECK_ENABLED` (after report-gen sign-off). **Test plan ready:** [`image-index/03_TEST_PLAN.md`](image-index/03_TEST_PLAN.md). **Nothing committed** — working-tree, pending Stanley.
+
 ## [2026-07-23] decision | image-index SEARCH + blacklist-xref design VALIDATED via workflow — verdict SHIP
 
 Ran a 12-agent design-validation workflow (`wf_df5cfb75-a9e`, 1.21M subagent tokens): 6 design dimensions → 5 adversarial lenses → synthesis. All 5 lenses FIX_NEEDED (12 must-fix findings); synthesis resolved them → **SHIP**. Design filed at [`image-index/02_SEARCH_DESIGN.md`](image-index/02_SEARCH_DESIGN.md) (806 lines).
