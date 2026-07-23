@@ -6,7 +6,13 @@ Mirrors the face-service `face:index:submit` and plates `plate:index:submit` con
 
 > ⚠️ **Do NOT XADD our internal `image:index` compute stream directly** — that bypasses persist/mint/tenant-guard. The submit-intake stream below is the **guarded front door**.
 
-> 🚧 **STATUS — BUILT, NOT YET LIVE.** The submit-intake consumer and the REST read surface are implemented and committed but ship **gated-OFF** (`IMAGE_INDEX_ENABLED=false`). Still pending before this contract is usable end-to-end: **(1)** `image-embedding-compute` signals its `image-index-compute-workers` group is live (we do not dispatch before that); **(2)** our **Phase 3** results-consumer lands (until then a batch will not reach a terminal state); **(3)** the gateway route for the REST reads. We will signal coordinators when it goes live — build against this shape now, flip from mock to live then.
+> ✅ **STATUS — LIVE + verified end-to-end in production (2026-07-23).** The submit-intake consumer,
+> the compute round-trip (`image-embedding-compute`'s `image-index-compute-workers` group is live),
+> the results-consumer/land, and the gateway REST read are all deployed behind
+> `IMAGE_INDEX_ENABLED=true`. A real 2-URL batch round-tripped `image_batch.created → completed`
+> (`submitted:2 → embedded:2`), and the vectors were recovered through the gateway. **Coordinators
+> can integrate against this contract now** — see [IMAGE_INDEX_API.md §8](./IMAGE_INDEX_API.md) for the
+> verified worked example.
 
 ## The three legs
 

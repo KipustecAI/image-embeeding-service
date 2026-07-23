@@ -14,6 +14,30 @@ Chronological append-only record of meaningful events in the wiki and the system
 
 ---
 
+## [2026-07-23] verification + ingest | image-index gateway READ **PASS live**; API docs → verified-live; dw-offline pinged
+
+**api-gateway registered the route** (`/api/v1/embedding/image-index/*` → `ms-embedding-api` `/api/v1/image-index/*`) and deployed it. Re-ran the full e2e default (gateway) mode:
+- Discovered the storage key's tenant via `GET /api/v1/users/me` → `3996d660-…` (user "davis"); submitted under it so the tenant-scoped read matches.
+- **Full gateway smoke PASS ✅** — batch `0e3dcb9d-b3d6-4454-9a33-32fc46252e52`: submit → compute → land → `GET .../by-external-id 200` `{submitted:2, embedded:2, filtered:0, failed:0}`, each item a `qdrant_point_id`, `item_ref` echoing the submitted `item_id`. **< 1 s** end-to-end.
+- **Cloudflare gotcha:** the gateway is behind Cloudflare, which **403s (code 1010)** the default `Python-urllib` UA — the e2e script now sends `User-Agent: curl/8.4.0`. Documented in `IMAGE_INDEX_API.md §1`.
+
+**Docs synced to verified-live (sibling parity):** `IMAGE_INDEX_API.md` — status banner flipped 🚧→✅, gateway-routing note updated (registered + Cloudflare UA), new **§8 verified worked example** (the real `0e3dcb9d` response). `IMAGE_INDEX_SUBMIT.md` — status banner flipped to LIVE + "coordinators can integrate now".
+
+**Pinged dw-offline** (`lookia-dw-offline-service`, `sig_mrwygw7e`, thread `image-index-enrichment-target`): image-index is a **4th enrichment target** (`target="image"`/clip) alongside face/plates/analysis — the 3-leg integration spec (Redis submit `image:index:submit` / consume `image_batch:raw` / recover REST by external_id), N_CAP=100, `item_id`=`evidence_id`, the live proof, and a pointer to both `docs/apis/` contracts. When they add the `target="image"` row + the `image_batch:raw` handler we co-run a first run-scoped batch.
+
+## [2026-07-23] verification + decision | image-index LIVE e2e — Redis pipeline PASS in prod; gateway route requested
+
+Feature deployed and **LIVE** (`IMAGE_INDEX_ENABLED=true` on `ms-embedding-api` — proven by the presence of our `image-index-submit` + `image-index-results` consumer groups on the shared Redis, plus compute's `image-index-compute-workers` group on `image:index`).
+
+**Built the e2e harness** (mirrors deepface `face-index-e2e` / plates `gateway-smoke`):
+- `.claude/skills/image-index-e2e/SKILL.md` — the skill (preflight → submit → poll → verify; both `docs/apis/` contracts).
+- `scripts/test_e2e_image_index.py` — runner with `--groups` (precondition), `--redis-only` (submit + watch `image_batch:raw`, no API key), and default (submit + gateway READ). Reads Redis creds from `.env`; API key passed at call time, never persisted.
+
+**Redis pipeline e2e — PASS ✅ (real batch, prod):** submitted 2 URLs from `data/image_urls.text` →
+`image_batch.created (computing, submitted:2)` → `image_batch.completed (submitted:2, embedded:2, filtered:0, failed:0)`. Reconciliation held (`submitted == embedded + failed`, `filtered == 0`). **batch `3d998aac-8298-4f16-8f68-c24dab900bde`.** This proves `IMAGE_INDEX_SUBMIT.md` + the whole deployed chain (submit consumer → compute embed → results consumer → land → lifecycle) works in production.
+
+**Gateway READ leg — BLOCKED on route registration (open item #3).** `GET /api/v1/embedding/image-index/...` returns a **gateway** 404 `"Route not found"` (before reaching us) — the `/api/v1/embedding/image-index/*` prefix isn't in the gateway `ROUTE_CONFIG` yet. (`STORAGE_SERVICE_URL`=`https://api.lookia.mx` + `STORAGE_SERVICE_API_KEY` from `.env` work as the gateway key; the gateway infers the tenant from the key, so no manual `user_id` needed on the READ.) **Requested registration** from the **`api-gateway`** agent (`sig_mrwwy19c`, thread `image-index-gateway-route`): add `/api/v1/embedding/image-index/*` → `ms-embedding-api:8001` path `/api/v1/image-index/*`, sibling of the existing embedding routes, pointing at `docs/apis/IMAGE_INDEX_API.md`. Stanley pinged them too. Once deployed → run the gateway READ smoke (default mode of the script).
+
 ## [2026-07-22] ship | image-index **Phase 3 BUILT** (results consumer + land + reaper, gated-OFF) — verdict SHIP, re-verified
 
 Compute signalled **LIVE** (`sig_mrwnsyet`, group `image-index-compute-workers` up on `image:index`, 81 tests green) — the freeze became a real producer. Built Phase 3 via a 9-agent delegate-build (`wf_d4a68dcc-664`, 590k subagent tokens): sequential implement (land logic → results consumer + reaper → main.py wiring) → 5 parallel adversarial lenses → synthesis. **Verdict SHIP, 0 must-fixes, all 5 lenses PASS** (clean audit this run — no placeholder degeneration).

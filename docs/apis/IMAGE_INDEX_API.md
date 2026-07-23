@@ -4,7 +4,11 @@
 
 **What it does:** a coordinator (dw-offline, as its **4th enrichment target** `target="image"`) submits a batch of **public image URLs** — e.g. detection crops from a run. The GPU embeds each image with **CLIP ViT-B-32 (512-D)**, we store the vector in a dedicated Qdrant collection plus a per-item reference row, and you **recover the results by your own id**.
 
-> 🚧 **STATUS — BUILT, NOT YET LIVE.** These endpoints are implemented and committed but ship **gated-OFF** (`IMAGE_INDEX_ENABLED=false`) → every route currently returns **`503`**. Also pending: the **gateway route registration** (below), and our **Phase 3** results-consumer (until it lands, batches will not reach a terminal state). Build against these shapes now; we will signal when the flag flips.
+> ✅ **STATUS — LIVE + verified end-to-end in production (2026-07-23).** Deployed behind
+> `IMAGE_INDEX_ENABLED=true`, the gateway route is registered, and a real batch round-tripped
+> submit → GPU embed → land → **gateway READ 200** with all invariants holding (`submitted:2 →
+> embedded:2`, each item carrying a `qdrant_point_id`). The `by-external-id` recovery below is the
+> exact shape returned. See §8 for the worked example.
 
 ---
 
@@ -22,7 +26,15 @@ Authenticate with your **API key** only. The gateway validates it, resolves your
 
 > **Tenant isolation is derived from your API key.** Every read is scoped to the tenant the gateway resolves. **The `user_id` the coordinator submitted with must equal this tenant**, or you get `404`.
 
-> **Gateway routing prerequisite:** `/api/v1/embedding/image-index/*` → `/api/v1/image-index/*` must be registered in the gateway `ROUTE_CONFIG` (a sibling of the existing `/api/v1/embedding/{search,stats,pipeline,recalculate}`). Until then a call returns `{"detail":"Route not found: …"}` **from the gateway** — distinct from our tenant-miss `404`. The Redis submit/lifecycle legs do not depend on this.
+> **Gateway routing:** `/api/v1/embedding/image-index/*` → `/api/v1/image-index/*` is **registered**
+> (sibling of `/api/v1/embedding/{search,stats,pipeline,recalculate}`; `api-gateway` deployed it
+> 2026-07-23). The gateway strips the `/embedding` segment and forwards to `ms-embedding-api:8001`.
+> A `{"detail":"Route not found: …"}` would be a **gateway** 404 (route missing) — distinct from our
+> tenant-miss `404` (`{"detail":"No runs..."}`).
+>
+> ⚠️ **Cloudflare:** the gateway sits behind Cloudflare, which **403s (error code 1010)** a request
+> with a default `Python-urllib` User-Agent. Send a normal `User-Agent` header (`curl/*`, a browser
+> UA, or any real client string). `curl` and browsers pass by default.
 
 ---
 
@@ -181,6 +193,42 @@ curl "https://api.lookia.mx/api/v1/embedding/image-index/results/by-external-id/
 
 ---
 
-## 7. Version
+## 7. Worked example (verified in prod, 2026-07-23)
 
-Contract **v1** (2026-07-22). Compute envelope **v1-FROZEN** — [`../requirements/IMAGE_INDEX_COMPUTE.md`](../requirements/IMAGE_INDEX_COMPUTE.md). Design + rationale: [`../image-index/00_DESIGN.md`](../image-index/00_DESIGN.md) §7. Reference analogs: `deepface-restapi/docs/apis/FACE_INDEX_API.md` §4–5, `lookia-plates-service/docs/apis/PLATE_INDEX_API.md` §4–5, `video-server_microservicios_etl-service/docs/apis/ONDEMAND_ANALYSIS_API.md` §3.
+Submitted 2 durable image URLs over Redis (`image:index:submit`, tenant `davis`), then recovered
+through the gateway with the tenant's API key:
+
+```bash
+# READ leg — through the gateway (Cloudflare needs a real User-Agent)
+curl -sS "https://api.lookia.mx/api/v1/embedding/image-index/results/by-external-id/e2e-gw-...?include_items=true" \
+  -H "X-API-Key: <key>" -H "User-Agent: curl/8.4.0" | python3 -m json.tool
+```
+
+```jsonc
+{
+  "batch_id": "0e3dcb9d-b3d6-4454-9a33-32fc46252e52",
+  "external_id": "e2e-gw-...", "client_batch_ref": "e2e-gw-...-a9f396b0",
+  "status": "completed",
+  "counts": { "submitted": 2, "embedded": 2, "filtered": 0, "failed": 0 },
+  "source_ref": "image-index-e2e", "created_at": "2026-07-23T03:19:55.98Z",
+  "completed_at": "2026-07-23T03:19:56.67Z", "error_message": null,
+  "items": [
+    { "item_ref": "crop-0", "source_url": null, "item_index": 0, "status": "embedded",
+      "qdrant_point_id": "fa2ac19e-2f11-52fe-8f4d-e9a8bf271b68", "duplicate_of_index": null, "error_message": null },
+    { "item_ref": "crop-1", "source_url": null, "item_index": 1, "status": "embedded",
+      "qdrant_point_id": "66a5b4ac-5209-5f25-93b4-4718b7c839f3", "duplicate_of_index": null, "error_message": null }
+  ]
+}
+```
+
+All invariants held: terminal `completed`; `submitted == embedded + failed`; `filtered == 0`; one
+item row per submitted; each `embedded` item carries a `qdrant_point_id`. End-to-end wall time
+(submit → completed) was **< 1 s** for a 2-image batch. Reproduce with
+`scripts/test_e2e_image_index.py` (skill: `image-index-e2e`).
+
+> **Note:** `source_url` is `null` in v1 — the compute results wire doesn't echo the image URL back,
+> so the reference row stores none. If the frontend needs it, it's an additive v1.1 field.
+
+## 8. Version
+
+Contract **v1** (2026-07-22; verified live 2026-07-23). Compute envelope **v1-FROZEN** — [`../requirements/IMAGE_INDEX_COMPUTE.md`](../requirements/IMAGE_INDEX_COMPUTE.md). Design + rationale: [`../image-index/00_DESIGN.md`](../image-index/00_DESIGN.md) §7. Reference analogs: `deepface-restapi/docs/apis/FACE_INDEX_API.md` §4–5, `lookia-plates-service/docs/apis/PLATE_INDEX_API.md` §4–5, `video-server_microservicios_etl-service/docs/apis/ONDEMAND_ANALYSIS_API.md` §3.
