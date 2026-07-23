@@ -6,10 +6,20 @@ The compute wire (`image:index` / `image:index:results`) is **not** re-specified
 companion [`../requirements/IMAGE_INDEX_COMPUTE.md`](../requirements/IMAGE_INDEX_COMPUTE.md); this
 doc points at it where an item crosses that boundary.
 
-> **Status of the compute wire:** the companion is still **v1-DRAFT**. Phases 1–2 build against a
-> stable submit/lifecycle envelope we own; the **land logic (Phase 3) and any live dispatch are
-> gated on the compute v1-FREEZE**. Our terminal/reconciliation logic holds whether or not compute
-> ever emits `filtered` (it stays 0).
+> **Status of the compute wire: 🟢 v1-FROZEN (2026-07-22).** Phase 3 builds against the frozen shape.
+> Two deltas from this doc's original draft, both settled in the freeze — **honour these over any
+> stale wording below**:
+> 1. **Vectors arrive base64-encoded, not as `list[float]`.** `results[]` carries `vector_b64`
+>    (base64 of the raw 512 × float32 little-endian `'<f4'` buffer, set iff `status=="embedded"`),
+>    plus constants `vector_encoding == "f32le_b64"` and `embedding_dim == 512`. Decode:
+>    `np.frombuffer(base64.b64decode(v), dtype="<f4")` → `.tolist()` for Qdrant. Assert
+>    `vector_encoding` and **dead-letter an unknown encoding** rather than misparse. (Raw `tolist()`
+>    was 1114 KB/message at N=100 vs 281 KB base64 — lossless, and it keeps `N_CAP=100`.)
+> 2. **Diversity dedup is DISABLED in v1.** `filtered` is reserved-but-never-emitted and
+>    `duplicate_of_index` is always null, so `submitted == embedded + failed`.
+>
+> Also locked: `N_CAP=100`; our results consumer uses **`XREADGROUP COUNT=1`** (~281 KB/message) and
+> we set MAXLEN on our `image:index` dispatch. Full terms + rationale: the companion contract §2–§4.
 
 ---
 
@@ -147,10 +157,16 @@ count vocabulary in the whole feature.
 - `UniqueConstraint("qdrant_point_id", name="uq_image_index_result_point")` — belt-and-suspenders. (The point-id is deterministic `uuid5(batch_id,item_index)` and `item_index` is already unique per batch, so this can only fire on the same redelivery the composite key already collapses. Kept, but it is **not** the primary idempotency guard.)
 - `CheckConstraint("status IN ('embedded','download_failed','decode_failed','filtered','no_result')", name="ck_image_index_results_status")`.
 
-**`filtered` / `duplicate_of_index` are forward-compatible, not load-bearing.** Compute open-item
-#3 leaves diversity-dedup optional; if compute never emits `filtered`, these stay null/0 and the
-terminal rule is unaffected. **Do not build logic that assumes `filtered` ever fires** until compute
-confirms — `filtered_count == 0` is the expected v1 state.
+**`filtered` / `duplicate_of_index` are forward-compatible, not load-bearing — and in v1 they never
+fire.** The freeze (2026-07-22) **disabled diversity dedup** for this flow: compute emits only
+`embedded | download_failed | decode_failed | no_result`, so `filtered_count` is **always 0** and
+`duplicate_of_index` is **always null**. The columns + enum member stay for a possible v1.1.
+**Do not build logic that assumes `filtered` ever fires.** Rationale (companion contract §3): the
+crops are already deduplicated upstream by dw-offline's detection-worker (v2.4 pHash track ledger —
+446 occurrences → 10 rows, 98% suppressed), and the metrics available compute-side score worst of
+five benchmarked (Bhattacharyya F1 0.690, CLIP 0.631 — CLIP is *semantic*, so different cars read as
+"similar"). If revisited, lift detection-worker's `src/services/phash.py` (F1 0.893, ~0.22 ms/img,
+pure numpy+PIL) and commit to `duplicate_of_index` pointer-resolution at that time.
 
 ### Status constants — `src/db/models/constants.py` (append)
 
@@ -319,7 +335,7 @@ Consumes `image:index:results`, group `image-index-results`, **two** event types
 `_process_computed(payload)` → `service.land_computed(session, payload, vector_repo=image_index_repo)`,
 which does all the heavy work **idempotently**:
 1. For each `results[]` item → **upsert the reference row by `(batch_id, item_index)`** (`INSERT … ON CONFLICT (batch_id, item_index) DO UPDATE`; a redelivery overwrites in place).
-2. If `status=='embedded'` and `vector` present → collect into a **single batch** `upsert_items(...)` call on the dedicated `image_index_embeddings` collection with the deterministic point-id (redelivery overwrites the same point; the indexed image becomes searchable — face-style). Failures/`filtered`/`no_result` store the disposition + `error_message`, no vector. The reference row stores the same deterministic `qdrant_point_id` (recomputable via `image_index_point_id()`, no round-trip).
+2. If `status=='embedded'` → **decode `vector_b64`** (assert `vector_encoding == "f32le_b64"` first; an unknown encoding is a **dead-letter**, never a silent misparse) via `np.frombuffer(base64.b64decode(v), dtype="<f4").tolist()`, and collect into a **single batch** `upsert_items(...)` call on the dedicated `image_index_embeddings` collection with the deterministic point-id (redelivery overwrites the same point; the indexed image becomes searchable — face-style). Failures/`no_result` store the disposition + `error_message`, no vector. (`filtered` never fires in v1 — dedup disabled.) The reference row stores the same deterministic `qdrant_point_id` (recomputable via `image_index_point_id()`, no round-trip).
 3. **Recompute counts ABSOLUTELY** via `SELECT status, COUNT(*) … WHERE batch_id=:id GROUP BY status`, written into the batch columns. **Never `+= n`** — redelivery-safe.
 4. **Reconciliation check + terminal-from-counts** via the single shared helper (§8): if `embedded+filtered+failed < submitted` → **do NOT terminalize** (leave `computing`, log-loud the shortfall; the reaper is the backstop). Else `completed` iff `failed==0`, else `completed_with_errors`.
 5. Build the `image_batch.completed` payload while ORM attrs are loaded, commit, then publish to `image_batch:raw` **before ACK**.

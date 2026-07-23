@@ -28,6 +28,8 @@ Consumer-facing contracts for the HTTP API. Wiki layer — current state.
 | [API_REFERENCE.md](API_REFERENCE.md) | Canonical reference for every endpoint: search, recalculate, blacklist, health/stats. Auth, request/response shapes, Qdrant payload indices. | wiki |
 | [BLACKLIST_API.md](BLACKLIST_API.md) | Standalone consumer-facing contract for the `/api/v1/blacklist/image-entries` surface. Designed for the frontend team. | wiki |
 | [CURL_EXAMPLES.md](CURL_EXAMPLES.md) | Curl cookbook — usage examples for search (with weapons / category / blacklist filters), blacklist CRUD, stream debugging. | wiki |
+| [apis/IMAGE_INDEX_SUBMIT.md](apis/IMAGE_INDEX_SUBMIT.md) | **Coordinator contract** for the on-demand image-index — Redis-only intake (`image:index:submit`), two-tier rejection, idempotency, `image_batch:raw` lifecycle + status machine + 4-key counts. Sibling of plates `PLATE_INDEX_SUBMIT.md`. | wiki (consumer contract) |
+| [apis/IMAGE_INDEX_API.md](apis/IMAGE_INDEX_API.md) | **Frontend read contract** for the on-demand image-index — `GET /results/{batch_id}` + `GET /results/by-external-id/{external_id}?all`, response/item shapes, status codes, gateway prefix. Sibling of `FACE_INDEX_API.md` §4–5. | wiki (consumer contract) |
 
 ---
 
@@ -55,7 +57,7 @@ Wire-level contracts with upstream / downstream services. Wiki layer — these a
 | Page | Summary | Layer |
 |---|---|---|
 | [requirements/IMAGE_COMPUTE_STREAMS.md](requirements/IMAGE_COMPUTE_STREAMS.md) | Field-additions ask sent to the compute team. Tracks the §2 category negotiation and §3 purpose/blacklist_entry_id echo. | wiki (negotiation-driven) |
-| [requirements/IMAGE_INDEX_COMPUTE.md](requirements/IMAGE_INDEX_COMPUTE.md) | **DRAFT** compute-envelope ask to `image-embedding-compute` for the new on-demand **batch-index** flow (face/plates/etl playbook). Dispatch `image:index` / results `image:index:results`, 512-D vector per item echoing `item_id`, disposition enum, §5 open-items to freeze. | wiki (negotiation-driven, DRAFT) |
+| [requirements/IMAGE_INDEX_COMPUTE.md](requirements/IMAGE_INDEX_COMPUTE.md) | **🟢 v1-FROZEN** compute-envelope contract with `image-embedding-compute` for the on-demand **batch-index** flow. Dispatch `image:index` / results `image:index:results`; per item a **`vector_b64`** (512-D float32 LE, base64) echoing `item_id`; dispositions with `filtered` **reserved** (dedup disabled in v1); `N_CAP=100`; operational constraints (timeout, loop fairness, stream trim). | wiki (canonical contract) |
 | [requirements/REPORT_GENERATION_STREAMS.md](requirements/REPORT_GENERATION_STREAMS.md) | Outbound contract to the report-generation team. §2 weapons:detected; §3 image:blacklist_match. **Canonical for those wire shapes.** | wiki (negotiation-driven) |
 | [requirements/LOOKIA_DW_PUBLISHERS.md](requirements/LOOKIA_DW_PUBLISHERS.md) | Inbound requirement from lookia-dw — 7 publish hooks feeding their data warehouse. **Negotiation tracker** — captures enum maps, MAXLEN sizing, lifecycle simplification asks, implementation plan. | wiki (negotiation-driven) |
 | [requirements/LOOKIA_DW_STREAMS.md](requirements/LOOKIA_DW_STREAMS.md) | **Authoritative wire-format contract** for the 7 outbound streams to lookia-dw. Per-stream payload schemas + examples + MAXLEN + delivery / ordering / dedup semantics. The DW consumer builds against this. | wiki (canonical contract) |
@@ -108,7 +110,8 @@ The new additive/isolated/gated-OFF on-demand **batch-index + query** flow (face
 | [image-index/README.md](image-index/README.md) | Overview, locked decisions, post-audit resolutions, phase index, open-items table. | wiki (design) |
 | [image-index/00_DESIGN.md](image-index/00_DESIGN.md) | Validated design — wire topology, canonical Settings, data model + migration, dedicated Qdrant collection, streams/consumers/reaper, coordinator submit+lifecycle contract, REST surface, invariant map (§7), isolation proof, post-audit fix log. | wiki (design) |
 | [image-index/01_PLAN.md](image-index/01_PLAN.md) | Phased delegate-build plan (foundations → submit-intake → results+reaper → REST → live e2e); each additive + gated-OFF; compute-freeze dependencies marked. | wiki (design) |
-| [requirements/IMAGE_INDEX_COMPUTE.md](requirements/IMAGE_INDEX_COMPUTE.md) | Companion compute-envelope contract (owned by `image-embedding-compute`). **v1-DRAFT.** | wiki (negotiation-driven, DRAFT) |
+| [apis/IMAGE_INDEX_SUBMIT.md](apis/IMAGE_INDEX_SUBMIT.md) · [apis/IMAGE_INDEX_API.md](apis/IMAGE_INDEX_API.md) | The two **consumer-facing** contracts for this feature (coordinator Redis intake + frontend REST read). | wiki (consumer contract) |
+| [requirements/IMAGE_INDEX_COMPUTE.md](requirements/IMAGE_INDEX_COMPUTE.md) | Companion compute-envelope contract (owned by `image-embedding-compute`). **🟢 v1-FROZEN 2026-07-22** — Phase 3 builds against it. | wiki (canonical contract) |
 
 ---
 

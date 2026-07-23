@@ -13,7 +13,7 @@ This mirrors the already-live face (`face:index`), plates (`plate:index`), and e
 blacklist paths — every artifact is net-new or an append-only addition to a shared registry, and
 nothing runs until `IMAGE_INDEX_ENABLED` (default **False**) is flipped after a live smoke.
 
-- **Compute envelope (companion, not duplicated here):** [`../requirements/IMAGE_INDEX_COMPUTE.md`](../requirements/IMAGE_INDEX_COMPUTE.md) — `image:index` / `image:index:results`, owned by the compute agent. **Still v1-DRAFT.**
+- **Compute envelope (companion, not duplicated here):** [`../requirements/IMAGE_INDEX_COMPUTE.md`](../requirements/IMAGE_INDEX_COMPUTE.md) — `image:index` / `image:index:results`, owned by the compute agent. **🟢 v1-FROZEN 2026-07-22.** Two deltas Phase 3 must honour: vectors arrive as **`vector_b64`** (`f32le_b64`, 512-D float32 LE) not `list[float]`, and **diversity dedup is DISABLED** (`filtered` reserved-but-never-emitted, `duplicate_of_index` always null → `submitted == embedded + failed`).
 - **This design owns** the submit envelope (`image:index:submit`) and the lifecycle envelope (`image_batch:raw`).
 
 ## Goals
@@ -69,11 +69,18 @@ Each phase is independently additive and gated-OFF; each = implement → adversa
 
 | # | Item | Owner | Blocks |
 |---|---|---|---|
-| 1 | Freeze `IMAGE_INDEX_COMPUTE.md` (stream names, `N_CAP=100`, whether compute emits `filtered`, 512-D shape) | compute | Phase 3 land logic + any live dispatch |
+| 1 | ~~Freeze `IMAGE_INDEX_COMPUTE.md`~~ — ✅ **CLOSED 2026-07-22, v1-FROZEN.** All 5 items agreed: streams/event-types accepted · `N_CAP=100` with **`vector_b64`** encoding · **dedup DISABLED** · 512-D CLIP confirmed · dedicated batch path. Compute signals when their consumer group is live. | ~~compute~~ | ~~Phase 3~~ — **unblocked** |
 | 2 | Confirm lifecycle event_type strings `image_batch.*` and the 4-key folded counts with dw-offline; add the `target="image"` enrichment row | dw-offline | Phase 5 go-live |
 | 3 | Register gateway route `/api/v1/embedding/image-index/*` → `/api/v1/image-index/*` (sibling of `.../embedding/search`) | gateway | Public REST reads (not the Redis legs) |
 | 4 | `client_batch_ref` UNIQUE scope — global vs per-user (recommend global; dw refs are globally unique) | us + dw-offline | Nice-to-confirm, not blocking |
 | 5 | Reaper `FOR UPDATE SKIP LOCKED` — required only before running >1 API replica (single-replica today) | us | Scale-out, not v1 |
+
+## Consumer-facing contracts (hand these out)
+
+| Doc | Audience | Sibling analog |
+|---|---|---|
+| [`../apis/IMAGE_INDEX_SUBMIT.md`](../apis/IMAGE_INDEX_SUBMIT.md) | **Coordinators** (dw-offline) — Redis-only intake, lifecycle, status machine, counts | plates `PLATE_INDEX_SUBMIT.md` |
+| [`../apis/IMAGE_INDEX_API.md`](../apis/IMAGE_INDEX_API.md) | **Frontend / REST clients** — the two GET recovery legs incl. `by-external-id?all` | `FACE_INDEX_API.md` §4–5 |
 
 ## Cross-references
 

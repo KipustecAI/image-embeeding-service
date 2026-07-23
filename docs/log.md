@@ -14,6 +14,48 @@ Chronological append-only record of meaningful events in the wiki and the system
 
 ---
 
+## [2026-07-22] ship | image-index **Phase 3 BUILT** (results consumer + land + reaper, gated-OFF) — verdict SHIP, re-verified
+
+Compute signalled **LIVE** (`sig_mrwnsyet`, group `image-index-compute-workers` up on `image:index`, 81 tests green) — the freeze became a real producer. Built Phase 3 via a 9-agent delegate-build (`wf_d4a68dcc-664`, 590k subagent tokens): sequential implement (land logic → results consumer + reaper → main.py wiring) → 5 parallel adversarial lenses → synthesis. **Verdict SHIP, 0 must-fixes, all 5 lenses PASS** (clean audit this run — no placeholder degeneration).
+
+**Built (additive, gated behind `IMAGE_INDEX_ENABLED`):**
+- `image_index_service.land_computed` — idempotent: per-item `upsert_result` by `(batch_id,item_index)`; embedded → **assert `vector_encoding=="f32le_b64"` (raise/dead-letter on unknown)** → decode `np.frombuffer(b64decode, "<f4").tolist()` → one batched `upsert_items` with deterministic point-id; absolute GROUP-BY count recompute; terminal via the shared `terminal_status` (accounted-guard → stay `computing` + reaper backstop). `mark_error_from_compute_error` reads **`batch_id`** (our contract, NOT the live `entity_id` shape — called out in the module docstring).
+- `image_index_results_consumer.py` — mirrors the submit-consumer daemon bridge; `image.index.computed` (300s) + `compute.error` (60s) on `image:index:results`, group `image-index-results`, **`XREADGROUP COUNT=1`** (~281 KB/msg).
+- `image_index_reaper.py` — flag-guarded sweep on the existing `AsyncIOScheduler`; terminal DB mark committed **before** best-effort per-batch publish (per-publish try/except).
+- `main.py` — dedicated `ImageIndexVectorRepository` **sharing the live QdrantClient**, gated block rewired to the load-bearing **results-before-submit** cold-start order + reaper job; None-guarded shutdown. `git diff` = additive only.
+
+**Hand-back (main thread, not trusting the SHIP):** re-ran gates myself — app **24 routes**, full image-index suite **90→91 passed / 5 skipped** (0 Phase-1/2/4 regressions), ruff clean, single alembic head; spot-checked the `vector_b64` dead-letter path + the results-before-submit ordering + `main.py` byte-identity. **Applied the 2 decode-boundary nits** (labeled dead-letter for null/non-mult-4/wrong-dim `vector_b64` at the contract boundary instead of opaquely at Qdrant/numpy) + added a dead-letter test (the +1). Reaper multi-replica `FOR UPDATE SKIP LOCKED` left as a documented scale-out note (single replica today).
+
+**Remaining to integrate (all external / human):** flip `IMAGE_INDEX_ENABLED=true` in staging → **live batch smoke** (real dispatch to compute's LIVE group, watch `image_batch:raw` created→completed, verify vectors in `image_index_embeddings` + REST recovery + cross-tenant 404, send compute the `batch_id`) → dw-offline adopts `image_batch.*` + `target="image"` → gateway route → prod flip. **Nothing committed** — Phases 1-4 code + all docs are working-tree, pending Stanley's commit OK.
+
+## [2026-07-22] ingest | consumer-facing image-index API docs filed (`docs/apis/`) — sibling parity
+
+The delegate-build had deferred these as OPTIONAL (only `API_REFERENCE.md` was updated), leaving us without the standalone contracts every sibling publishes. Filed both, in a new **`docs/apis/`** directory matching `lookia-plates-service/docs/apis/`:
+
+- [`apis/IMAGE_INDEX_SUBMIT.md`](apis/IMAGE_INDEX_SUBMIT.md) — **coordinator** contract (sibling of plates `PLATE_INDEX_SUBMIT.md`): the three legs, submit payload + `items[]`, the **two-tier rejection** table (tier-1 unbindable → ACK-drop; tier-2 bindable → ERROR batch + `image_batch.failed`), idempotency by `client_batch_ref` (re-bind, no re-dispatch), `image_batch:raw` events, the `pending→computing→terminal` status machine, and the 4-key counts with `filtered` always 0.
+- [`apis/IMAGE_INDEX_API.md`](apis/IMAGE_INDEX_API.md) — **frontend read** contract (sibling of `FACE_INDEX_API.md` §4–5): both GET legs incl. **`by-external-id?all`** (non-unique id, newest-first, bounded 200), full response + `items[]` shapes, status codes (401/404/422/503), and the gateway prefix prerequisite.
+
+**Written from the code, not the design** — the router/schemas/consumer were read first, so documented params and shapes match what is actually implemented (`include_items`, `limit` 1–500, `offset`, `?all` alias; `item_ref` echoes the caller's `item_id`; no `matched` field; `duplicate_of_index` always null). Both carry an explicit **🚧 BUILT-NOT-YET-LIVE** banner listing what remains (compute group live signal, Phase 3 results-consumer, gateway route) so no consumer builds against a live assumption. Cross-linked from [`index.md`](index.md) + [`image-index/README.md`](image-index/README.md).
+
+## [2026-07-22] decision | image-index compute contract **v1-FROZEN** — vector_b64 adopted, dedup DISABLED on evidence
+
+`image-embedding-compute` reviewed our v1-DRAFT and returned a substantive counter (`sig_mrwiho2f`); we closed all items (`sig_mrwjk27o`). **[`requirements/IMAGE_INDEX_COMPUTE.md`](requirements/IMAGE_INDEX_COMPUTE.md) is now 🟢 v1-FROZEN** — Phase 3 is unblocked.
+
+**Two decisions (Stanley-approved):**
+
+1. **Vector encoding — accepted compute's counter.** `results[].vector` (`list[float]`) is replaced by **`vector_b64`** (base64 of the raw 512 × float32 little-endian `'<f4'` buffer, set iff `status=="embedded"`) + constants `vector_encoding="f32le_b64"` + `embedding_dim=512`. Their measurement: raw `tolist()` = **1114.3 KB** at N=100 vs **280.9 KB** base64 (their largest proven prod message today is 110.7 KB) — `tolist()` spends ~11 KB/vector to carry 2 KB of float32 because float32 prints as float64 reprs; zlib only reaches 56%, so compression isn't the lever. Lossless, keeps `N_CAP=100`, and we verified the decode bit-exact in our env before agreeing. Our reader asserts `vector_encoding` and **dead-letters an unknown encoding** rather than misparsing.
+
+2. **Diversity dedup — DISABLED in v1**, taking compute up on their own offer. They'd warned (correctly) that a `filtered` item has `vector=null` → never reaches Qdrant → **silently unsearchable** unless we resolve `duplicate_of_index` to the kept twin. We investigated dw-offline's **detection-worker** instead of guessing, and the evidence says a second dedup pass is the wrong trade:
+   - **The crops are already deduplicated upstream** — detection-worker CONTRACT v2.4 static-object dedup (pHash track ledger, 2026-07-14): **446 occurrences → 10 rows, 98% suppressed**. Their wiki: *"enrichment dispatch (face/plates) gets cheaper — fewer near-dup crops to the GPU indexers."* We are the 4th such indexer.
+   - **The compute-side metrics score worst of five benchmarked** over 4,005 labeled pairs (`detection-worker/docs/wiki/comparisons/dedup-methods-benchmark.md`): DINOv2 0.905 > pHash 0.893 > SSIM 0.740 > **Bhattacharyya 0.690** > **CLIP ViT-B/32 0.631 (last)**. Bhattacharyya misses 43% of true dupes and hits 0.300 median distance under a ×0.85 brightness shift (3× the 0.10 prod threshold); CLIP is last because it's *semantic* — two different cars read as "similar" (right for our index, wrong for instance-level dedup).
+   - **Index semantics** — each item is a distinct dw-offline `evidence_id`; face-index (whose result semantics we adopted) defaults `diversity_filter=false` for the same reason. etl runs dedup ON only because a 9B vision-LLM is expensive; CLIP is not.
+
+   Consequence: `filtered` **reserved-but-never-emitted**, `duplicate_of_index` always null, reconciliation simplifies to `submitted == embedded + failed`. v1.1 path if revisited: lift detection-worker's `phash.py` (~100 lines, pure numpy+PIL) rather than copy the 5-repo-drifted Bhattacharyya filter, and commit to pointer-resolution then.
+
+**Also agreed:** streams/event-types/group `image-index-compute-workers` as proposed · 512-D CLIP ViT-B-32 same singleton, L2-normalized · dedicated batch path on their side. **3 operational constraints acknowledged** — longer timeout + concurrent bounded downloads (dead host → per-item `download_failed`, never batch doom) · shared-event-loop fairness (`N_CAP=100` for v1; **lowering it later is explicitly NON-breaking**) · **stream trim, ours to honour**: MAXLEN ~2000 on our `image:index` dispatch + **`XREADGROUP COUNT=1`** on the results consumer (~281 KB/message), and we proposed MAXLEN ~200 on `image:index:results`.
+
+**Design docs synced to the frozen shape** (00_DESIGN status banner + §3 dedup note + §5.2 land step now specify the `vector_b64` decode; README + index.md updated). **Bring-up:** compute signals when their consumer group is live; we do not XADD before that. **Next: build Phase 3** (results consumer + land + reaper) against the frozen envelope.
+
 ## [2026-07-18] ship | image-index Phases 1+2+4 BUILT (gated-OFF) via delegate-build — verdict SHIP, re-verified
 
 Ran a 9-agent delegate-build workflow (`wf_93f78501-ea8`, 737k subagent tokens, ~35 min): **sequential implement (Foundations → Submit-intake → REST) → 5 parallel adversarial audit lenses → synthesis.** Verdict **SHIP, zero must-fixes** (all findings LOW nits). **Phase 3 (results consumer + reaper) + Phase 5 (live flip) intentionally HELD** pending the compute v1-FREEZE.
