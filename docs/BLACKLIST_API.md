@@ -51,8 +51,16 @@ All endpoints require gateway-set headers. Same scheme as the rest of the search
 | POST | `/api/v1/blacklist/image-entries/{id}/references` | yes | Attach a reference image (triggers async embed) |
 | DELETE | `/api/v1/blacklist/image-entries/{id}/references/{ref_id}` | yes | Remove a reference + its Qdrant point |
 | POST | `/api/v1/blacklist/image-entries/{id}/backfill` | yes | Re-run reverse search across all references |
+| POST | `/api/v1/blacklist/image-entries/{id}/cross-reference` | yes | **GPU-free** — does this entry appear in a set of indexed runs? Returns matches inline. Full spec: [IMAGE_INDEX_API.md §6](apis/IMAGE_INDEX_API.md). |
 
-All paths are prefixed with `/api/v1/blacklist`.
+> **Gateway base path (frontend):** through the API gateway the public prefix is
+> **`https://api.lookia.mx/api/v1/images/blacklist`**, which the gateway rewrites to the internal
+> `/api/v1/blacklist/image-entries` shown above. **So the frontend replaces the leading
+> `/api/v1/blacklist/image-entries` with `/api/v1/images/blacklist`** — e.g. create an entry with
+> `POST https://api.lookia.mx/api/v1/images/blacklist`, add a reference with
+> `POST …/api/v1/images/blacklist/{id}/references`, cross-reference with
+> `POST …/api/v1/images/blacklist/{id}/cross-reference`. The gateway injects `X-User-Id` from your
+> API key (send `X-API-Key`, not the `X-User-*` headers). Cloudflare needs a real `User-Agent`.
 
 ---
 
@@ -324,6 +332,31 @@ Each reference fires its own APScheduler job. `job_ids` is the list of jobs that
 
 **Errors:**
 - 404 if the entry doesn't exist.
+
+---
+
+### POST /api/v1/blacklist/image-entries/{id}/cross-reference  ✅ live
+
+**"Does this blacklisted entry appear in a set of on-demand *indexed* runs?"** A **GPU-free** reverse
+search: we take the entry's already-stored reference vector(s) and search the `image_index_embeddings`
+collection (the [on-demand image-index](apis/IMAGE_INDEX_API.md) feature) scoped to a list of
+`external_ids` (runs) + your tenant. Because nothing is re-embedded, it returns **inline (200, no poll)**.
+
+This is distinct from `/backfill` (which reverse-searches the **live evidence** collection): cross-reference
+targets the **indexed on-demand runs** and is scoped to the `external_ids` you pass.
+
+**Prerequisite:** the entry must be `INDEXED` (status `3`) — its reference image(s) embedded.
+
+- Body: `{ "external_ids": ["run-42", …] (1–200), "threshold"?: float, "max_results"?: int }`
+- Returns: `{ entry_id, external_ids, threshold_used, match_count, matches: [...] }` — each match carries
+  `external_id` / `batch_id` / `item_index` / `image_id` (= the crop's `evidence_id`) / `source_url` /
+  `similarity_score`.
+- **Full request/response spec + a verified worked example:** [IMAGE_INDEX_API.md §6](apis/IMAGE_INDEX_API.md).
+- Gated by `IMAGE_INDEX_SEARCH_ENABLED` (prod-default true) → `503` when off. Tenant-scoped: a foreign
+  `entry_id` → `404`; a run you don't own → simply absent from the results.
+
+Verified live in prod (2026-07-23): a blacklisted image was found in its run at `similarity_score`
+`0.9999998`, with **zero compute round-trips**.
 
 ---
 
