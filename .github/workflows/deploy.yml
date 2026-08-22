@@ -18,6 +18,8 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           port: ${{ secrets.SERVER_PORT }}
           script: |
+            set -euo pipefail
+
             cd /root/projects/microservices/image-embeeding-service
 
             echo "=== Pulling latest changes ==="
@@ -27,8 +29,6 @@ jobs:
             make build-image
 
             echo "=== Running migrations ==="
-            echo "=== Syncing canonical LookIA orchestrator ==="
-            echo "=== Syncing canonical LookIA orchestrator ==="
             echo "=== Syncing canonical LookIA orchestrator ==="
             cd /root/projects/microservices/video-server_microservicios-orchestrated
             git pull --ff-only origin main
