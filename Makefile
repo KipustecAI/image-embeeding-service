@@ -1,4 +1,4 @@
-.PHONY: help install run run-api run-worker run-all docker-up docker-down test clean migrate \
+.PHONY: help install run run-api run-all docker-up docker-down test clean migrate \
        lint lint-fix format format-check test-cov pre-commit-install pre-commit-run \
        build-image ci-local ci-lint ci-test ci-migrate ci-build ci-clean
 
@@ -8,12 +8,11 @@ help:
 	@echo "Startup order:"
 	@echo "  1. make docker-up       - Start PostgreSQL + Redis + Qdrant"
 	@echo "  2. make migrate         - Run database migrations"
-	@echo "  3. make run-api         - Start API server (terminal 1)"
-	@echo "  4. make run-worker      - Start ARQ storage worker (terminal 2)"
+	@echo "  3. make run-api         - Start API server (consumers run in-process)"
 	@echo ""
 	@echo "Development:"
 	@echo "  make install            - Install dependencies"
-	@echo "  make run-all            - Run API + worker in tmux"
+	@echo "  make run-all            - Same as run-api"
 	@echo "  make test               - Run integration tests"
 	@echo "  make test-cov           - Run tests with coverage report"
 	@echo "  make lint               - Ruff check"
@@ -62,19 +61,7 @@ run: run-all
 run-api:
 	python -m src.main
 
-run-worker:
-	arq src.workers.main.WorkerSettings
-
-run-all:
-	@if command -v tmux > /dev/null; then \
-		tmux new-session -d -s embedding-backend; \
-		tmux send-keys -t embedding-backend "make run-api" C-m; \
-		tmux split-window -t embedding-backend -v; \
-		tmux send-keys -t embedding-backend "make run-worker" C-m; \
-		tmux attach -t embedding-backend; \
-	else \
-		echo "tmux not found. Run in two terminals: make run-api + make run-worker"; \
-	fi
+run-all: run-api
 
 # --- Database ---
 

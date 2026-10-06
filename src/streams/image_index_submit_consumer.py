@@ -93,14 +93,12 @@ def create_image_index_submit_consumer() -> StreamConsumer:
     consumer = StreamConsumer(
         stream=settings.stream_image_index_submit,
         group=settings.image_index_submit_group,
-        redis_host=settings.redis_host,
-        redis_port=settings.redis_port,
-        redis_password=settings.redis_password or None,
-        redis_db=settings.redis_streams_db,
+        redis_url=settings.redis_streams_url,
         block_ms=settings.stream_consumer_block_ms,
         batch_size=settings.stream_consumer_batch_size,
         reclaim_idle_ms=settings.stream_reclaim_idle_ms,
         dead_letter_max_retries=settings.stream_dead_letter_max_retries,
+        dead_letter_maxlen=settings.stream_dead_letter_maxlen,
         concurrency=settings.stream_consumer_concurrency,
     )
     consumer.register_handler(_SUBMIT_EVENT, _handle_submit)
@@ -208,6 +206,7 @@ async def _process_submit(payload: dict, message_id: str) -> None:
             "items": dispatch_items,
             "metadata": payload.get("metadata"),
         },
+        maxlen=settings.stream_image_index_maxlen,
     )
     # The single actor that writes 'computing' — only AFTER a successful dispatch,
     # so the coordinator never sees `created` for a batch that failed to dispatch.

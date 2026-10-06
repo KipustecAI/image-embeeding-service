@@ -108,6 +108,7 @@ async def publish_blacklist_match(
             stream=settings.stream_reports_image_blacklist_match,
             event_type=IMAGE_BLACKLIST_MATCH_EVENT_TYPE,
             payload=event,
+            maxlen=settings.stream_reports_image_blacklist_match_maxlen,
         )
         logger.info(
             "Published image.blacklist_match: evidence=%s entry=%s score=%.3f trigger=%s",

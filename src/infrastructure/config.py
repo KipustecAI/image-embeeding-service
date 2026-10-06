@@ -3,6 +3,7 @@ Image Embedding Service Configuration
 """
 
 from functools import lru_cache
+from urllib.parse import quote
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
@@ -37,6 +38,9 @@ class Settings(BaseSettings):
     # Redis Configuration
     redis_host: str = Field("localhost", validation_alias="REDIS_HOST")
     redis_port: int = Field(6379, validation_alias="REDIS_PORT")
+    # Platform bus: one ACL user per service (e.g. ms-embedding-api). Empty =
+    # the default user, which is today's connection (no-op until cutover).
+    redis_username: str = Field("", validation_alias="REDIS_USERNAME")
     redis_password: str | None = Field(None, validation_alias="REDIS_PASSWORD")
     # Redis Streams
     redis_streams_db: int = Field(3, validation_alias="REDIS_STREAMS_DB")
@@ -64,6 +68,19 @@ class Settings(BaseSettings):
         3, validation_alias="STREAM_DEAD_LETTER_MAX_RETRIES"
     )
     stream_consumer_concurrency: int = Field(1, validation_alias="STREAM_CONSUMER_CONCURRENCY")
+    # The platform bus requires MAXLEN on every XADD. Caps for the streams that
+    # had none (approximate trimming, ``XADD ... MAXLEN ~ N``).
+    stream_evidence_search_maxlen: int = Field(
+        10_000, validation_alias="STREAM_EVIDENCE_SEARCH_MAXLEN"
+    )
+    stream_reports_weapons_detected_maxlen: int = Field(
+        10_000, validation_alias="STREAM_REPORTS_WEAPONS_DETECTED_MAXLEN"
+    )
+    stream_reports_image_blacklist_match_maxlen: int = Field(
+        10_000, validation_alias="STREAM_REPORTS_IMAGE_BLACKLIST_MATCH_MAXLEN"
+    )
+    stream_image_index_maxlen: int = Field(10_000, validation_alias="STREAM_IMAGE_INDEX_MAXLEN")
+    stream_dead_letter_maxlen: int = Field(1_000, validation_alias="STREAM_DEAD_LETTER_MAXLEN")
 
     # Recalculation
     recalculation_enabled: bool = Field(True, validation_alias="RECALCULATION_ENABLED")
@@ -127,9 +144,9 @@ class Settings(BaseSettings):
         "image_embedding:raw",
         validation_alias="DW_STREAM_IMAGE_EMBEDDING",
     )
-    # MAXLEN per stream. Defaults from the renegotiated contract sizing —
-    # observed prod volume drove the embed streams to 500k (was 100k).
-    # Bump `DW_MAXLEN_IMAGE_EMBEDDING` to 2_000_000 before a backfill push.
+    # MAXLEN per stream. The two embed streams follow the platform bus 6-hour
+    # rule (2026-10-05): ~13k for image_embedding_request:raw and ~50k for
+    # image_embedding:raw (were 500k). Raise by env only for a planned backfill.
     dw_maxlen_image_search_request: int = Field(
         10_000, validation_alias="DW_MAXLEN_IMAGE_SEARCH_REQUEST"
     )
@@ -146,9 +163,9 @@ class Settings(BaseSettings):
         10_000, validation_alias="DW_MAXLEN_BLACKLIST_IMAGE_EMBEDDING"
     )
     dw_maxlen_image_embedding_request: int = Field(
-        500_000, validation_alias="DW_MAXLEN_IMAGE_EMBEDDING_REQUEST"
+        13_000, validation_alias="DW_MAXLEN_IMAGE_EMBEDDING_REQUEST"
     )
-    dw_maxlen_image_embedding: int = Field(500_000, validation_alias="DW_MAXLEN_IMAGE_EMBEDDING")
+    dw_maxlen_image_embedding: int = Field(50_000, validation_alias="DW_MAXLEN_IMAGE_EMBEDDING")
 
     # ── On-demand image-index (ADDITIVE, ISOLATED, gated-OFF) ────────────────
     # Full spec: docs/image-index/00_DESIGN.md §2. Feature stays dark until this
@@ -224,6 +241,15 @@ class Settings(BaseSettings):
     def image_index_collection(self) -> str:
         """Read-only alias for `qdrant_collection_image_index` (§2 canonical name)."""
         return self.qdrant_collection_image_index
+
+    @property
+    def redis_streams_url(self) -> str:
+        """Streams Redis URL; ``user:password@`` percent-encoded, no auth without a password."""
+        auth = ""
+        if self.redis_password:
+            user = quote(self.redis_username, safe="") if self.redis_username else ""
+            auth = f"{user}:{quote(self.redis_password, safe='')}@"
+        return f"redis://{auth}{self.redis_host}:{self.redis_port}/{self.redis_streams_db}"
 
     @field_validator("environment")
     @classmethod

@@ -326,6 +326,7 @@ async def create_image_index_search(
             "max_results": body.max_results,
             "metadata": metadata,
         },
+        maxlen=settings.stream_evidence_search_maxlen,
     )
 
     return {

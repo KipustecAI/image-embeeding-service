@@ -32,6 +32,7 @@ class StreamConsumer:
         reclaim_idle_ms: int = 3_600_000,
         dead_letter_max_retries: int = 3,
         concurrency: int = 1,
+        dead_letter_maxlen: int = 1_000,
     ):
         self.stream = stream
         self.group = group
@@ -40,6 +41,7 @@ class StreamConsumer:
         self.batch_size = batch_size
         self.reclaim_idle_ms = reclaim_idle_ms
         self.dead_letter_max_retries = dead_letter_max_retries
+        self.dead_letter_maxlen = dead_letter_maxlen
         self._concurrency = concurrency
 
         self._handlers: dict[str, Callable] = {}
@@ -216,6 +218,8 @@ class StreamConsumer:
                         "original_message_id": message_id,
                         "dead_lettered_at": str(int(time.time())),
                     },
+                    maxlen=self.dead_letter_maxlen,
+                    approximate=True,
                 )
             self._ack(message_id)
             self._messages_dead_lettered += 1

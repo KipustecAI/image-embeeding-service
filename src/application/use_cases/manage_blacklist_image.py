@@ -365,6 +365,7 @@ class ManageBlacklistImageUseCase:
                         "purpose": "blacklist_embed",
                         "blacklist_entry_id": str(entry_id),
                     },
+                    maxlen=settings.stream_evidence_search_maxlen,
                 )
             except Exception as pub_err:
                 # Reference already inserted at TO_PROCESS — admin can
