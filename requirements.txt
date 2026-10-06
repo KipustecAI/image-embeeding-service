@@ -19,9 +19,8 @@ alembic
 psycopg2-binary
 greenlet
 
-# Redis + task queue
+# Redis Streams
 redis==5.2.1
-arq==0.26.1
 
 # Scheduler (safety nets)
 apscheduler>=3.10.0

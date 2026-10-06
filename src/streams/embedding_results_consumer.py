@@ -10,6 +10,7 @@ New ZIP flow (ETL integration):
 """
 
 import asyncio
+import base64
 import logging
 from datetime import datetime
 from uuid import uuid4
@@ -48,6 +49,32 @@ _storage_uploader: StorageUploader | None = None
 _stream_producer: StreamProducer | None = None
 
 
+F16_B64_LE = "f16-b64-le"
+
+
+def decode_vector(payload: dict, raw) -> np.ndarray:
+    """Decode one ``embeddings[i].vector`` into a float32 array.
+
+    ``vector_encoding`` (payload level) selects the wire format:
+
+    * absent → a JSON list of floats (today's format);
+    * ``f16-b64-le`` → base64 of little-endian float16, ``vector_dim`` values
+      (default 512), widened to float32;
+    * anything else → ``ValueError``. Raised before any side effect, so the
+      message stays pending and is dead-lettered after the retry budget.
+    """
+    encoding = payload.get("vector_encoding")
+    if encoding is None:
+        return np.array(raw, dtype=np.float32)
+    if encoding != F16_B64_LE:
+        raise ValueError(f"unknown vector_encoding {encoding!r}")
+    vector = np.frombuffer(base64.b64decode(raw, validate=True), dtype="<f2").astype(np.float32)
+    expected = int(payload.get("vector_dim", 512))
+    if vector.shape[0] != expected:
+        raise ValueError(f"{F16_B64_LE} vector has {vector.shape[0]} values, expected {expected}")
+    return vector
+
+
 def set_results_event_loop(loop: asyncio.AbstractEventLoop):
     global _event_loop
     _event_loop = loop
@@ -78,14 +105,12 @@ def create_embedding_results_consumer() -> StreamConsumer:
     consumer = StreamConsumer(
         stream=settings.stream_embeddings_results,
         group=settings.stream_backend_group,
-        redis_host=settings.redis_host,
-        redis_port=settings.redis_port,
-        redis_password=settings.redis_password or None,
-        redis_db=settings.redis_streams_db,
+        redis_url=settings.redis_streams_url,
         block_ms=settings.stream_consumer_block_ms,
         batch_size=settings.stream_consumer_batch_size,
         reclaim_idle_ms=settings.stream_reclaim_idle_ms,
         dead_letter_max_retries=settings.stream_dead_letter_max_retries,
+        dead_letter_maxlen=settings.stream_dead_letter_maxlen,
         concurrency=settings.stream_consumer_concurrency,
     )
     consumer.register_handler("embeddings.computed", _handle_embeddings_computed)
@@ -149,6 +174,10 @@ async def _process_embeddings_result(payload: dict, message_id: str):
         logger.warning(f"Skipping result with missing data: evidence_id={evidence_id}")
         return
 
+    # Decode every vector before any side effect: a malformed or unknown
+    # encoding raises here, so the message is not ACKed (pending → dead letter).
+    vectors = [decode_vector(payload, emb["vector"]) for emb in embeddings_data]
+
     # Dedup check
     async with get_session() as session:
         repo = EmbeddingRequestRepository(session)
@@ -194,9 +223,8 @@ async def _process_embeddings_result(payload: dict, message_id: str):
         # per docs/requirements/REPORT_GENERATION_STREAMS.md §2.3.
         report_images_with_detections: list[dict] = []
 
-        for emb in embeddings_data:
+        for emb, vector in zip(embeddings_data, vectors, strict=True):
             point_id = str(uuid4())
-            vector = np.array(emb["vector"], dtype=np.float32)
 
             # Resolve image URL: uploaded URL (ZIP flow) or direct URL (legacy)
             image_name = emb.get("image_name", "")
@@ -340,6 +368,7 @@ async def _process_embeddings_result(payload: dict, message_id: str):
                     stream=settings.stream_reports_weapons_detected,
                     event_type=WEAPONS_DETECTED_EVENT_TYPE,
                     payload=event,
+                    maxlen=settings.stream_reports_weapons_detected_maxlen,
                 )
             except Exception as pub_err:
                 logger.error(

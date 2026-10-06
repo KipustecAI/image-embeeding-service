@@ -251,7 +251,7 @@ Seven outbound streams feed the lookia-dw data warehouse. **Wire-format authorit
 | `image_embedding_request:raw` | `embedding_requests` | lifecycle | `image_embedding_request.created` / `.completed` / `.failed` |
 | `image_embedding:raw` | `evidence_embeddings` | INSERT (per image) | `image_embedding.upserted` |
 
-All 7 use the standard `{event_type, payload}` flat-hash envelope. PII protection: `blacklist_image_entry.name` is hashed to `name_hash` before publish — raw name never on the wire (locked by [`../../tests/test_dw_publisher.py::test_blacklist_image_entry_never_includes_raw_name`](../../tests/test_dw_publisher.py)). MAXLEN per stream is env-driven via `DW_MAXLEN_*` settings; embed streams default 500k, bump `DW_MAXLEN_IMAGE_EMBEDDING=2_000_000` before any backfill push.
+All 7 use the standard `{event_type, payload}` flat-hash envelope. PII protection: `blacklist_image_entry.name` is hashed to `name_hash` before publish — raw name never on the wire (locked by [`../../tests/test_dw_publisher.py::test_blacklist_image_entry_never_includes_raw_name`](../../tests/test_dw_publisher.py)). MAXLEN per stream is env-driven via `DW_MAXLEN_*` settings; embed streams default to the platform bus 6-hour rule (`image_embedding_request:raw` 13k, `image_embedding:raw` 50k, 2026-10-05); raise by env only for a planned backfill.
 
 Producer code: [`../../src/services/dw_publisher_service.py`](../../src/services/dw_publisher_service.py). Hash helper: [`../../src/application/helpers/dw_hashing.py`](../../src/application/helpers/dw_hashing.py).
 

@@ -28,14 +28,12 @@ def create_evidence_embed_consumer() -> StreamConsumer:
     consumer = StreamConsumer(
         stream=settings.stream_evidence_embed,
         group=settings.stream_consumer_group,
-        redis_host=settings.redis_host,
-        redis_port=settings.redis_port,
-        redis_password=settings.redis_password,
-        redis_db=settings.redis_streams_db,
+        redis_url=settings.redis_streams_url,
         block_ms=settings.stream_consumer_block_ms,
         batch_size=settings.stream_consumer_batch_size,
         reclaim_idle_ms=settings.stream_reclaim_idle_ms,
         dead_letter_max_retries=settings.stream_dead_letter_max_retries,
+        dead_letter_maxlen=settings.stream_dead_letter_maxlen,
         concurrency=settings.stream_consumer_concurrency,
     )
     consumer.register_handler("evidence.ready.embed", _handle_evidence_ready)

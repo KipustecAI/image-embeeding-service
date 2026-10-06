@@ -151,10 +151,7 @@ async def lifespan(app: FastAPI):
     #    report events to report-generation — see docs/requirements/
     #    REPORT_GENERATION_STREAMS.md).
     stream_producer = StreamProducer(
-        redis_host=settings.redis_host,
-        redis_port=settings.redis_port,
-        redis_password=settings.redis_password or None,
-        redis_db=settings.redis_streams_db,
+        redis_url=settings.redis_streams_url,
     )
     set_stream_producer(stream_producer)
     # Same producer routes the image.blacklist_match events (Phase 05)
@@ -505,6 +502,7 @@ async def create_search(
             "max_results": body.max_results,
             "metadata": metadata,
         },
+        maxlen=settings.stream_evidence_search_maxlen,
     )
 
     return {
