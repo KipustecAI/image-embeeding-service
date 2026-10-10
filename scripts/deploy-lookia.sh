@@ -11,7 +11,6 @@ environment=$1
 
 case "$environment" in
   dev)
-    fleet_expected=36 lucam_expected=4
     expected_host=srv917124
     branch=dev
     project=lookia-dev
@@ -22,7 +21,6 @@ case "$environment" in
     run_target=dev-run
     ;;
   prod)
-    fleet_expected=36 lucam_expected=5
     expected_host=srv1880388
     branch=main
     project=lookia-prod
@@ -86,6 +84,12 @@ remote_revision=$(git -C "$source_repo" ls-remote origin "refs/heads/$branch" | 
 [[ -z "${EXPECTED_SHA:-}" || "$source_revision" == "$EXPECTED_SHA" ]]
 
 git -C "$orchestrator" pull --ff-only origin main
+# Expected container counts live in one place, the orchestrator selector, so adding or
+# retiring a container is one orchestrator commit instead of an edit in every service.
+fleet_selector="$orchestrator/docker/lookia/compose.$environment.env"
+fleet_expected=$(awk -F= '$1 == "LOOKIA_FLEET_EXPECTED" {print $2; exit}' "$fleet_selector")
+lucam_expected=$(awk -F= '$1 == "LOOKIA_LUCAM_EXPECTED" {print $2; exit}' "$fleet_selector")
+[[ "$fleet_expected" =~ ^[0-9]+$ && "$lucam_expected" =~ ^[0-9]+$ ]]
 
 # Readiness must pass before backup/build so a configuration failure cannot
 # retag the image or create source/image/container drift.
