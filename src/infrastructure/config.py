@@ -79,7 +79,8 @@ class Settings(BaseSettings):
     stream_reports_image_blacklist_match_maxlen: int = Field(
         10_000, validation_alias="STREAM_REPORTS_IMAGE_BLACKLIST_MATCH_MAXLEN"
     )
-    stream_image_index_maxlen: int = Field(10_000, validation_alias="STREAM_IMAGE_INDEX_MAXLEN")
+    # 1,000 (was 10,000): Valkey PROD bus memory budget (2026-10-09, task F4).
+    stream_image_index_maxlen: int = Field(1_000, validation_alias="STREAM_IMAGE_INDEX_MAXLEN")
     stream_dead_letter_maxlen: int = Field(1_000, validation_alias="STREAM_DEAD_LETTER_MAXLEN")
 
     # Recalculation
