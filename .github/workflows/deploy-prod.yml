@@ -1,0 +1,89 @@
+name: Deploy Image Embedding API PROD
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Exact green main commit SHA to deploy"
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: image-embedding-api-deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  verify-ci:
+    name: Verify exact main SHA and green CI
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.release.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - id: release
+        name: Resolve and verify release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          head_sha=$(git rev-parse HEAD)
+          test "$REQUESTED_SHA" = "$head_sha"
+          conclusion=$(gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow ci.yml \
+            --branch main \
+            --commit "$head_sha" \
+            --event push \
+            --limit 1 \
+            --json conclusion \
+            --jq '.[0].conclusion')
+          test "$conclusion" = success
+          echo "sha=$head_sha" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    name: Deploy to PROD
+    needs: verify-ci
+    runs-on: ubuntu-latest
+    environment: prod
+    env:
+      EXPECTED_SHA: ${{ needs.verify-ci.outputs.sha }}
+    steps:
+      - name: Require explicit PROD environment enablement
+        env:
+          PROD_DEPLOY_ENABLED: ${{ secrets.PROD_DEPLOY_ENABLED }}
+        run: test "$PROD_DEPLOY_ENABLED" = "true"
+
+      - name: Deploy exact revision through guarded orchestrator procedure
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          EXPECTED_SHA: ${{ env.EXPECTED_SHA }}
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT }}
+          timeout: 60s
+          command_timeout: 30m
+          envs: EXPECTED_SHA
+          script: |
+            set -euo pipefail
+
+            repo=/home/stanley/project/microservices/image-embeeding-service
+            test "$(hostname -s)" = srv1880388
+            cd "$repo"
+            git diff --quiet
+            git diff --cached --quiet
+            git fetch origin main
+            git switch main
+            git pull --ff-only origin main
+            test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+            ./scripts/deploy-lookia.sh prod

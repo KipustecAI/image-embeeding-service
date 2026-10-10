@@ -1,0 +1,140 @@
+name: Deploy Image Embedding API DEV
+
+# ⛔ NOT workflow_run. GitHub evaluates a workflow_run trigger from the DEFAULT
+#    branch, so the deprecated pattern fires a second, duplicate deploy labelled
+#    with the default branch, and hands the job the wrong ref for the Environment
+#    check (image-embedding had a push-to-main legacy deploy.yml).
+#    Trigger on push and poll CI for the exact SHA.
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Exact green dev commit SHA to deploy"
+        required: true
+        type: string
+      force:
+        description: "Deploy even when the commit changes only docs/workflows"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: image-embedding-api-deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  verify-ci:
+    name: Verify exact dev SHA and green CI
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      sha: ${{ steps.release.outputs.sha }}
+      deploy_required: ${{ steps.release.outputs.deploy_required }}
+    env:
+      EXPECTED_SHA: ${{ github.event_name == 'push' && github.sha || inputs.sha }}
+      FORCE_DEPLOY: ${{ github.event_name == 'workflow_dispatch' && inputs.force || false }}
+      BEFORE_SHA: ${{ github.event.before }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - id: release
+        name: Resolve and verify release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          head_sha=$(git rev-parse HEAD)
+          test "$EXPECTED_SHA" = "$head_sha"
+          if test "$GITHUB_EVENT_NAME" = push; then
+            test "$GITHUB_REF" = refs/heads/dev
+          fi
+
+          ci_conclusion=
+          for attempt in $(seq 1 150); do
+            ci_run=$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow ci.yml \
+              --branch dev \
+              --commit "$head_sha" \
+              --event push \
+              --limit 1 \
+              --json databaseId,status,conclusion \
+              --jq '.[0] | [.databaseId, .status, (.conclusion // "")] | @tsv')
+            if test -n "$ci_run"; then
+              read -r ci_run_id ci_status ci_conclusion <<< "$ci_run"
+              echo "CI run $ci_run_id status=$ci_status conclusion=${ci_conclusion:-pending}"
+              if test "$ci_status" = completed; then
+                test "$ci_conclusion" = success
+                break
+              fi
+            else
+              echo "Waiting for the exact push CI run for $head_sha"
+            fi
+            test "$attempt" -lt 150
+            sleep 10
+          done
+          test "$ci_conclusion" = success
+          echo "sha=$head_sha" >> "$GITHUB_OUTPUT"
+
+          # Skip container recreation when a push changed nothing that ships.
+          # ⚠️ This compares the PUSH RANGE, not the repo against the host. A
+          #    runtime change that failed CI, followed by a docs-only push, is
+          #    left STRANDED and reports green. `force: true` is the way out.
+          deploy_required=true
+          if test "$GITHUB_EVENT_NAME" = push && test "$FORCE_DEPLOY" != true && git cat-file -e "$BEFORE_SHA^{commit}" 2>/dev/null; then
+            runtime_paths=$(git diff --name-only "$BEFORE_SHA" "$head_sha" | \
+              grep -Ev '^(docs/|\.github/|[^/]+\.md$|coverage\.xml$)' || true)
+            if test -z "$runtime_paths"; then
+              deploy_required=false
+            fi
+          fi
+          echo "deploy_required=$deploy_required" >> "$GITHUB_OUTPUT"
+          echo "deploy_required=$deploy_required"
+
+  deploy:
+    name: Deploy to DEV
+    if: ${{ needs.verify-ci.outputs.deploy_required == 'true' }}
+    needs: verify-ci
+    runs-on: ubuntu-latest
+    environment: dev
+    env:
+      EXPECTED_SHA: ${{ needs.verify-ci.outputs.sha }}
+    steps:
+      - name: Deploy exact revision through guarded orchestrator procedure
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          EXPECTED_SHA: ${{ env.EXPECTED_SHA }}
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT }}
+          timeout: 60s
+          command_timeout: 30m
+          envs: EXPECTED_SHA
+          script: |
+            set -euo pipefail
+
+            repo=/root/projects/microservices/image-embeeding-service
+            test "$(hostname -s)" = srv917124
+            cd "$repo"
+            git diff --quiet
+            git diff --cached --quiet
+            git fetch origin dev
+            if git show-ref --verify --quiet refs/heads/dev; then
+              git switch dev
+            else
+              git switch -c dev --track origin/dev
+            fi
+            git pull --ff-only origin dev
+            test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+            ./scripts/deploy-lookia.sh dev
