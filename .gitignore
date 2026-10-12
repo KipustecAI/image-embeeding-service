@@ -10,3 +10,5 @@ data/
 *.jpg
 Screenshot*
 clean_all_data.sh
+# public-asset backfill progress (scripts/backfill_public_assets.py)
+scripts/.backfill_public_done.txt
