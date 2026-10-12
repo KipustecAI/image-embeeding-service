@@ -48,6 +48,13 @@ _zip_processor = ZipProcessor()
 _storage_uploader: StorageUploader | None = None
 _stream_producer: StreamProducer | None = None
 
+# storage-service decides public vs private SOLELY by the upload ``folder``:
+# anything under ``public/`` is served anonymously by the storage gateway,
+# everything else returns 403. Until this prefix existed every frame was
+# uploaded to a bare ``embeddings/...`` and was private, so the UI could not
+# load a single search-result image. Keep this; the guard test pins it.
+_PUBLIC_PREFIX = "public"
+
 
 F16_B64_LE = "f16-b64-le"
 
@@ -193,7 +200,7 @@ async def _process_embeddings_result(payload: dict, message_id: str):
             image_names = [e["image_name"] for e in embeddings_data if "image_name" in e]
             if image_names:
                 image_map = await _zip_processor.download_and_extract(zip_url, image_names)
-                folder = f"embeddings/{camera_id}/{evidence_id}"
+                folder = f"{_PUBLIC_PREFIX}/embeddings/{camera_id}/{evidence_id}"
                 # Bounded-parallel uploads — sequential uploads regularly blew
                 # the 300s consumer budget for ZIPs with many frames.
                 upload_sem = asyncio.Semaphore(8)
