@@ -286,3 +286,22 @@ def test_event_is_json_serializable():
     # Round-trip
     parsed = json.loads(serialized)
     assert parsed["evidence_id"] == EVIDENCE_ID
+
+
+# ── alert flag (the compute only informs; downstream sends) ───────────────────
+
+
+def _build(summary):
+    return build_weapons_detected_event(
+        evidence_id=EVIDENCE_ID, camera_id=CAMERA_ID, user_id=USER_ID, device_id=DEVICE_ID,
+        app_id=1, infraction_code="X", weapon_summary=summary,
+        images_with_detections=[_image("a.jpg", 0)], detected_at=FIXED_TS,
+    )
+
+
+def test_alert_required_true_when_compute_confirms():
+    assert _build({**FULL_SUMMARY, "alert_required": True})["alert"] == {"required": True}
+
+
+def test_alert_defaults_to_required_for_legacy_producer():
+    assert _build(FULL_SUMMARY)["alert"] == {"required": True}
