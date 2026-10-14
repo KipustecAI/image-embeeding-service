@@ -116,6 +116,8 @@ def build_weapons_detected_event(
         "infraction_code": infraction_code,
         "detected_at": detected_at.isoformat() + "Z",
         "summary": event_summary,
+        # The compute decides; downstream (reports/alerting) only builds and sends the alert.
+        "alert": {"required": summary.get("alert_required", True) is not False},
         "images": [
             {
                 "image_name": img.get("image_name"),
