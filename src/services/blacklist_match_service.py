@@ -92,6 +92,9 @@ async def publish_blacklist_match(
         match_target=match_target,
         external_id=external_id,
         batch_id=batch_id,
+        # Frame reference from the evidence point payload (zip_ref points only).
+        zip_url=evidence_metadata.get("zip_url"),
+        zip_entry=evidence_metadata.get("zip_entry"),
     )
 
     if _stream_producer is None:

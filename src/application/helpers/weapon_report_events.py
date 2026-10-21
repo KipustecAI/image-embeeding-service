@@ -41,7 +41,8 @@ def build_weapons_detected_event(
             or empty dict if the producer didn't send one; the builder
             fills sane defaults.
         images_with_detections: A list of dicts with keys `image_name`,
-            `image_index`, `image_url`, `detections` — **already filtered
+            `image_index`, `image_url`, `detections` (optional `zip_url`,
+            `zip_entry` — null when absent) — **already filtered
             to only frames with at least one detection**. The builder does
             NOT filter again; callers must pre-filter.
         detected_at: Optional explicit timestamp for testing. Defaults to
@@ -121,6 +122,9 @@ def build_weapons_detected_event(
                 "image_name": img.get("image_name"),
                 "image_index": img.get("image_index"),
                 "image_url": img.get("image_url"),
+                # Additive, nullable (frames-desde-zip): RAW ZIP reference.
+                "zip_url": img.get("zip_url"),
+                "zip_entry": img.get("zip_entry"),
                 "detections": list(img.get("detections") or []),
             }
             for img in images_with_detections

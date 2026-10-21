@@ -20,6 +20,7 @@ from uuid import UUID
 
 import numpy as np
 
+from ..application.helpers.frame_refs import search_match_frame_fields
 from ..application.helpers.source_type_filter import build_evidence_only_filter
 from ..application.helpers.weapon_filters import build_weapon_filter_conditions
 from ..db.models.constants import (
@@ -214,6 +215,8 @@ async def _process_search_result(payload: dict, message_id: str):
                     similarity_score=match.similarity_score,
                     image_url=match.image_url,
                     match_metadata=match.metadata,
+                    # qdrant_point_id / image_name / zip_entry (frames-desde-zip)
+                    **search_match_frame_fields(match.metadata),
                 )
                 session.add(m)
                 match_rows_for_dw.append(m)

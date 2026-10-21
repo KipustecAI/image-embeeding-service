@@ -46,6 +46,9 @@ def main_patches(monkeypatch):
     constructors/factories that would reach Redis/Qdrant/Postgres/threads are
     replaced.
     """
+    # zip_ref (the default) refuses to start without a public frame base URL.
+    monkeypatch.setattr(main.settings, "frames_public_base_url", "https://api-dev.example")
+
     # DB engine — connect() is an async CM around a conn whose execute is awaited;
     # dispose() is awaited at shutdown.
     conn = MagicMock()
@@ -208,15 +211,24 @@ async def test_lifespan_disabled_constructs_and_starts_nothing_image_index(
     assert main.image_index_vector_repo is None
 
 
-def test_app_imports_at_28_routes():
+def test_app_imports_at_29_routes():
     # Phase 4 mounted the 2 read legs; the image-index SEARCH increment
     # (02_SEARCH_DESIGN Capability A) added 3 gated routes (POST /search,
     # GET /search/{id}, GET /search/{id}/matches). Capability B (§7.3) adds 1
     # more gated route — POST /api/v1/blacklist/image-entries/{id}/cross-reference
     # on the unconditionally-mounted blacklist router (503 when the search flag is
-    # off). 24 → 27 → 28.
-    assert len(main.app.routes) == 28
+    # off). Frames desde ZIP (FZ-04) adds the public GET+HEAD
+    # /api/v1/frames/{point_id} (one route, two methods). 24 → 27 → 28 → 29.
+    assert len(main.app.routes) == 29
 
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+async def test_lifespan_zip_ref_without_base_url_refuses_to_start(main_patches, monkeypatch):
+    monkeypatch.setattr(main.settings, "frame_storage_mode", "zip_ref")
+    monkeypatch.setattr(main.settings, "frames_public_base_url", "")
+    with pytest.raises(RuntimeError, match="FRAMES_PUBLIC_BASE_URL"):
+        async with main.lifespan(MagicMock()):
+            pass

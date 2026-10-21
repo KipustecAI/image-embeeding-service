@@ -23,6 +23,14 @@ class EvidenceEmbeddingRecord(Base):
     # Per-image weapon detections — see docs/weapons/01_DATABASE.md
     weapon_detections = Column(JSONB, nullable=True)
 
+    # Frame-from-ZIP reference (FRAME_STORAGE_MODE=zip_ref). NULL on rows ingested
+    # before the change or in "upload" mode. zip_entry is the RAW path inside the
+    # ZIP (e.g. "cropped/a.jpg"); NULL when compute did not send it (older compute),
+    # then GET /api/v1/frames matches by basename == image_name.
+    zip_url = Column(Text, nullable=True)
+    image_name = Column(Text, nullable=True)
+    zip_entry = Column(Text, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # Relationships

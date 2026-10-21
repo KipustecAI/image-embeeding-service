@@ -82,6 +82,10 @@ def test_full_event_matches_contract_shape():
         "matched_image_url",
         "matched_image_index",
         "matched_qdrant_point_id",
+        # Additive frames-desde-zip keys (nullable).
+        "matched_point_id",
+        "zip_url",
+        "zip_entry",
         "similarity_score",
         "threshold_used",
         "trigger",

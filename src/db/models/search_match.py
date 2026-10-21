@@ -25,6 +25,12 @@ class SearchMatch(Base):
     # Per-match run tag for image-index searches (02_SEARCH_DESIGN §4). NULL for
     # every evidence row; indexed so the frontend groups matches by run (M4).
     external_id = Column(String(255), nullable=True, index=True)
+    # Matched vector + its frame reference (frames-desde-zip). Nullable: old rows
+    # and matches whose Qdrant payload predates the change carry NULL. Not part
+    # of to_dict() so the existing REST responses stay byte-identical.
+    qdrant_point_id = Column(String(255), nullable=True)
+    image_name = Column(Text, nullable=True)
+    zip_entry = Column(Text, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
 

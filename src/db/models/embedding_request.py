@@ -18,6 +18,9 @@ class EmbeddingRequest(Base):
     camera_id = Column(String(255), nullable=False, index=True)
     status = Column(Integer, nullable=False, default=1, index=True)
     image_urls = Column(JSONB, default=[])
+    # Number of embeddings stored for this evidence (len of embeddings_data).
+    # NULL on rows ingested before frames-desde-zip.
+    image_count = Column(Integer, nullable=True)
 
     # ETL fields (multi-tenant + infraction metadata)
     user_id = Column(String(255), nullable=True, index=True)

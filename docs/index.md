@@ -116,6 +116,16 @@ The new additive/isolated/gated-OFF on-demand **batch-index + query** flow (face
 
 ---
 
+## Feature — Frames desde ZIP
+
+Serve evidence frames on demand from the evidence ZIP (HTTP Range) instead of uploading a copy of each frame. Built 2026-10-21 on `feat/frames-from-zip`, not deployed.
+
+| Page | Summary | Layer |
+|---|---|---|
+| [frames-from-zip/DESIGN.md](frames-from-zip/DESIGN.md) | Problem (storage read-only 2026-10-21, ~65k frames/h copied), decisions with `#frames-desde-zip` channel refs, contract (A ingest, B additive event keys, C public `GET/HEAD /api/v1/frames/{point_id}`), env keys, rollout, rollback (`FRAME_STORAGE_MODE=upload`), old rows, and the read-only `scripts/check_zip_range.py`. | wiki (design + contract) |
+
+---
+
 ## Raw / historical (superseded)
 
 Kept for reference. Don't update — refer to wiki pages for current state.
@@ -148,5 +158,6 @@ When you need to find something fast, this is the table to scan.
 | "Weapons notifications are slow" — what to check first | [weapons/PERFORMANCE_ANALYSIS_2026_05.md](weapons/PERFORMANCE_ANALYSIS_2026_05.md) |
 | How the image blacklist works | [image-blacklist/README.md](image-blacklist/README.md) → individual phase plans |
 | What `category` is and why values look like `"[2,5]"` | [image-blacklist/01_CATEGORY.md](image-blacklist/01_CATEGORY.md), [requirements/IMAGE_COMPUTE_STREAMS.md](requirements/IMAGE_COMPUTE_STREAMS.md) §2 |
+| How frame URLs `/api/v1/frames/{id}` work / `FRAME_STORAGE_MODE` | [frames-from-zip/DESIGN.md](frames-from-zip/DESIGN.md), [API_REFERENCE.md](API_REFERENCE.md) |
 | Operational verification checklists | [image-blacklist/07_DOCS_AND_VERIFICATION.md](image-blacklist/07_DOCS_AND_VERIFICATION.md), [weapons/05_DOCS_AND_VERIFICATION.md](weapons/05_DOCS_AND_VERIFICATION.md) |
 | The migration from v1 → v2 architecture | [new_arq_v2/05_MIGRATION_PLAN.md](new_arq_v2/05_MIGRATION_PLAN.md) |
