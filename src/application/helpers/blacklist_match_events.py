@@ -65,6 +65,11 @@ def build_blacklist_match_event(
     match_target: BlacklistMatchTarget = "evidence",
     external_id: str | None = None,
     batch_id: str | None = None,
+    # ── Frame reference (frames-desde-zip, additive + nullable) ──
+    # Always emitted. NULL for points ingested before zip_ref and for the
+    # image-index path. zip_entry is the RAW path inside the ZIP.
+    zip_url: str | None = None,
+    zip_entry: str | None = None,
     # ── Optional testing hook ──
     matched_at: datetime | None = None,
 ) -> dict[str, Any]:
@@ -99,6 +104,11 @@ def build_blacklist_match_event(
         "matched_image_url": matched_image_url,
         "matched_image_index": matched_image_index,
         "matched_qdrant_point_id": matched_qdrant_point_id,
+        # Additive (frames-desde-zip): same id under the platform-wide name the
+        # frame endpoint uses (GET /api/v1/frames/{matched_point_id}).
+        "matched_point_id": matched_qdrant_point_id or None,
+        "zip_url": zip_url,
+        "zip_entry": zip_entry,
         "similarity_score": similarity_score,
         "threshold_used": threshold_used,
         "trigger": trigger,

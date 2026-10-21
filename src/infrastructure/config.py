@@ -3,7 +3,7 @@ Image Embedding Service Configuration
 """
 
 from functools import lru_cache
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
@@ -238,6 +238,37 @@ class Settings(BaseSettings):
         200, validation_alias="IMAGE_INDEX_EXTERNAL_IDS_CAP"
     )
 
+    # ── Frames served from the evidence ZIP (Lookia Platform#frames-desde-zip) ──
+    # "zip_ref" (default): ingest stores zip_url/zip_entry per vector and image_url
+    # points at GET /api/v1/frames/{qdrant_point_id}; no ZIP download, no upload.
+    # "upload": today's behavior byte-identical (download ZIP, upload frames).
+    frame_storage_mode: str = Field("zip_ref", validation_alias="FRAME_STORAGE_MODE")
+    # Public base of the frame URL (e.g. https://api-dev.lookia.mx). Empty =
+    # relative "/api/v1/frames/{id}" (a warning is logged once).
+    frames_public_base_url: str = Field("", validation_alias="FRAMES_PUBLIC_BASE_URL")
+    # Overall deadline of one frame read (presign + tail + entry): timeout → 504.
+    frames_fetch_timeout_s: float = Field(25.0, validation_alias="FRAMES_FETCH_TIMEOUT_S")
+    # Global cap on concurrent storage reads by the frame endpoint.
+    frames_max_concurrent_fetches: int = Field(8, validation_alias="FRAMES_MAX_CONCURRENT_FETCHES")
+    # In-process LRU of parsed ZIP central directories (entries per zip_url).
+    frames_index_cache_size: int = Field(512, validation_alias="FRAMES_INDEX_CACHE_SIZE")
+    # In-process LRU of frame bytes per point_id, bounded by total size.
+    frames_bytes_cache_max_mb: int = Field(128, validation_alias="FRAMES_BYTES_CACHE_MAX_MB")
+    # Optional Redis byte cache. Empty = off. NOT the streams Redis by default:
+    # the platform Valkey ACL may deny plain GET/SET for our bus user.
+    frames_bytes_cache_redis_url: str = Field("", validation_alias="FRAMES_BYTES_CACHE_REDIS_URL")
+    # Hosts the frame endpoint may read ZIPs from (comma-separated). The host of
+    # STORAGE_SERVICE_URL is always added. The route is public: no other host.
+    frames_allowed_hosts: str = Field("storage.lookia.mx", validation_alias="FRAMES_ALLOWED_HOSTS")
+
+    @property
+    def frames_allowed_host_set(self) -> frozenset[str]:
+        hosts = {h.strip().lower() for h in self.frames_allowed_hosts.split(",") if h.strip()}
+        storage_host = urlsplit(self.storage_service_url).hostname
+        if storage_host:
+            hosts.add(storage_host.lower())
+        return frozenset(hosts)
+
     @property
     def image_index_collection(self) -> str:
         """Read-only alias for `qdrant_collection_image_index` (§2 canonical name)."""
@@ -258,6 +289,15 @@ class Settings(BaseSettings):
         allowed = ["development", "staging", "production"]
         if v not in allowed:
             raise ValueError(f"Environment must be one of: {allowed}")
+        return v
+
+    @field_validator("frame_storage_mode")
+    @classmethod
+    def validate_frame_storage_mode(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        allowed = ["zip_ref", "upload"]
+        if v not in allowed:
+            raise ValueError(f"FRAME_STORAGE_MODE must be one of: {allowed}")
         return v
 
     @field_validator("default_similarity_threshold")

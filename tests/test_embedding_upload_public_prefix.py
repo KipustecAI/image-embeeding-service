@@ -62,6 +62,9 @@ async def test_uploads_land_under_the_public_prefix(monkeypatch):
     monkeypatch.setattr(mod, "_vector_repo", _StopAfterUpload())
     monkeypatch.setattr(mod, "get_session", _fake_session)
     monkeypatch.setattr(mod, "EmbeddingRequestRepository", _FakeRepo)
+    # The download+upload path is FRAME_STORAGE_MODE=upload; the default
+    # (zip_ref) makes no upload at all — see test_embedding_zip_ref_mode.py.
+    monkeypatch.setattr(mod.settings, "frame_storage_mode", "upload")
 
     vec = np.zeros(512, dtype=np.float32).tolist()
     payload = {

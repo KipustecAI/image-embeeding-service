@@ -25,6 +25,7 @@ from sqlalchemy import text
 
 from src.api.dependencies import UserContext, get_user_context
 from src.api.v1.routers import blacklist_image as blacklist_image_router
+from src.api.v1.routers import frames as frames_router
 from src.api.v1.routers import image_index as image_index_router
 from src.application.helpers.source_type_filter import build_evidence_only_filter
 from src.application.helpers.weapon_filters import build_weapon_filter_conditions
@@ -103,6 +104,9 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+# httpx logs every request URL at INFO, presigned signatures included.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 settings = get_settings()
 
@@ -146,6 +150,15 @@ async def lifespan(app: FastAPI):
     storage_uploader = StorageUploader(base_url=settings.storage_service_url)
     set_storage_uploader(storage_uploader)
     logger.info(f"Storage uploader configured: {settings.storage_service_url}")
+    # zip_ref writes image_url = FRAMES_PUBLIC_BASE_URL + /api/v1/frames/{id} into
+    # Postgres, Qdrant and the DW events; an empty base would store relative URLs
+    # for good, so refuse to start instead.
+    if settings.frame_storage_mode == "zip_ref" and not settings.frames_public_base_url:
+        raise RuntimeError("FRAME_STORAGE_MODE=zip_ref requires FRAMES_PUBLIC_BASE_URL")
+    logger.info(
+        f"Frame storage mode: {settings.frame_storage_mode} "
+        f"(base URL: {settings.frames_public_base_url or '-'})"
+    )
 
     # 3. Stream producer (for publishing search requests to GPU and
     #    report events to report-generation — see docs/requirements/
@@ -308,6 +321,9 @@ async def lifespan(app: FastAPI):
     if scheduler and scheduler.running:
         scheduler.shutdown(wait=False)
 
+    # Frame endpoint's shared httpx client (created lazily on the first request).
+    await frames_router.close_frame_service()
+
     await engine.dispose()
     logger.info("Shutdown complete")
 
@@ -328,6 +344,10 @@ app.include_router(blacklist_image_router.router)
 # every route 503s via require_image_index_enabled when the flag is off. See
 # docs/image-index/00_DESIGN.md §7.
 app.include_router(image_index_router.router)
+
+# Public frame endpoint (frames desde ZIP, FZ-04) — NO auth dependency: the
+# gateway strips X-User-*/X-API-Key on this route. See src/api/v1/routers/frames.py.
+app.include_router(frames_router.router)
 
 
 # ── Health & Stats ──
@@ -678,6 +698,7 @@ async def trigger_recalculation(
     import numpy as np
     from sqlalchemy import delete as sa_delete
 
+    from src.application.helpers.frame_refs import search_match_frame_fields
     from src.db.models.constants import SimilarityStatus
     from src.db.models.search_match import SearchMatch
 
@@ -734,6 +755,8 @@ async def trigger_recalculation(
                         similarity_score=match.similarity_score,
                         image_url=match.image_url,
                         match_metadata=match.metadata,
+                        # qdrant_point_id / image_name / zip_entry (frames-desde-zip)
+                        **search_match_frame_fields(match.metadata),
                     )
                 )
 

@@ -14,6 +14,19 @@ Chronological append-only record of meaningful events in the wiki and the system
 
 ---
 
+## [2026-10-21] ship + decision | Frames desde ZIP BUILT (not deployed): frames served by Range from the evidence ZIP, no more per-frame uploads
+
+Storage became read-only on 2026-10-21, which broke the per-frame upload to `public/embeddings/...` (~65k frames/h). Agreed in `#frames-desde-zip` (#1811 ZIPs permanent, #1818 proposal, #1826 public route by UUID, #1828 DW keys + `image_count`, #1829/#1831 gateway, #1822/#1823 presign + Range verified, #1821 `zip_entry` from compute PR #4). Design + contract: [`frames-from-zip/DESIGN.md`](frames-from-zip/DESIGN.md).
+
+**Built on `feat/frames-from-zip` (4 increments, working tree, not committed):**
+- Settings `FRAME_STORAGE_MODE` (default `zip_ref`) + `FRAMES_*`; migration `b2f6c8d1e4a7` (additive nullable columns on `evidence_embeddings`, `embedding_requests.image_count`, `search_matches`).
+- `src/services/zip_frame_reader.py` — tail Range + entry Range read, ZIP64, presign for private keys, one `?nc=` retry on stale objects (unsigned URLs only).
+- Public `GET/HEAD /api/v1/frames/{point_id}` (route count 28 → 29), documented in [`API_REFERENCE.md`](API_REFERENCE.md).
+- Ingest switch: `zip_ref` stores the reference and writes `image_url = {FRAMES_PUBLIC_BASE_URL}/api/v1/frames/{id}`; `upload` keeps today's behavior. Additive nullable keys on the 5 outbound events.
+- `scripts/check_zip_range.py` — read-only Range check of one `zip_url` (the "Range test in the PR").
+
+**Before deploy:** apply the migration, set `FRAMES_PUBLIC_BASE_URL`, run `check_zip_range.py` against one public and one private ZIP. **Rollback:** `FRAME_STORAGE_MODE=upload` (only usable once storage accepts writes again).
+
 ## [2026-07-23] verification + ingest | image-index SEARCH + blacklist-xref VERIFIED LIVE in prod; API doc updated for the frontend
 
 Deployed with `IMAGE_INDEX_SEARCH_ENABLED` **default-true** (`02fa6d8` — search is prod-standard, not an opt-in toggle; the auto-hook stays default-false pending report-gen). Ran the full test plan against prod:

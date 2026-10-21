@@ -7,6 +7,13 @@ New ZIP flow (ETL integration):
 - GPU sends image_name (filename inside ZIP) instead of image_url
 - Backend downloads ZIP, extracts filtered images, uploads to storage service
 - Permanent MinIO URLs stored in DB and Qdrant
+
+Frames-from-ZIP (Lookia Platform#frames-desde-zip, FRAME_STORAGE_MODE):
+- "upload": the ZIP flow above, unchanged.
+- "zip_ref" (default): NO ZIP download and NO storage upload. Each vector keeps
+  zip_url / image_name / zip_entry (DB columns + Qdrant payload) and image_url
+  is the frame URL ``{FRAMES_PUBLIC_BASE_URL}/api/v1/frames/{qdrant_point_id}``,
+  served by src/api/v1/routers/frames.py from a Range read of the ZIP.
 """
 
 import asyncio
@@ -18,6 +25,7 @@ from uuid import uuid4
 import numpy as np
 
 from ..application.helpers.category_serializer import entities_to_category
+from ..application.helpers.frame_refs import frame_url, strip_cache_buster
 from ..application.helpers.source_type_filter import build_blacklist_only_filter
 from ..application.helpers.weapon_report_events import (
     WEAPONS_DETECTED_EVENT_TYPE,
@@ -57,6 +65,9 @@ _PUBLIC_PREFIX = "public"
 
 
 F16_B64_LE = "f16-b64-le"
+
+# FRAME_STORAGE_MODE value that skips the ZIP download + upload (see module doc).
+FRAME_MODE_ZIP_REF = "zip_ref"
 
 
 def decode_vector(payload: dict, raw) -> np.ndarray:
@@ -192,11 +203,23 @@ async def _process_embeddings_result(payload: dict, message_id: str):
             logger.info(f"Skipping duplicate evidence {evidence_id}")
             return
 
+    # Frame storage mode — read per message so a settings override applies
+    # without a restart in tests. zip_ref needs a ZIP to point into: without a
+    # zip_url (legacy direct image_url payloads) it changes nothing.
+    zip_ref_mode = bool(zip_url) and settings.frame_storage_mode == FRAME_MODE_ZIP_REF
+    # Never persist a "?nc=<token>" cache-buster variant of the ZIP URL. A URL
+    # urllib cannot split is stored as received rather than failing the message.
+    try:
+        stored_zip_url = strip_cache_buster(zip_url) if zip_ref_mode else None
+    except ValueError:
+        stored_zip_url = zip_url
+
     try:
         # 1. If ZIP flow: download ZIP, extract filtered images, upload to storage
         uploaded_urls: dict[str, str] = {}  # image_name → public_url
 
-        if zip_url and _storage_uploader:
+        # zip_ref mode skips this block entirely: no ZIP download, no upload.
+        if zip_url and _storage_uploader and not zip_ref_mode:
             image_names = [e["image_name"] for e in embeddings_data if "image_name" in e]
             if image_names:
                 image_map = await _zip_processor.download_and_extract(zip_url, image_names)
@@ -235,7 +258,19 @@ async def _process_embeddings_result(payload: dict, message_id: str):
 
             # Resolve image URL: uploaded URL (ZIP flow) or direct URL (legacy)
             image_name = emb.get("image_name", "")
-            image_url = uploaded_urls.get(image_name, emb.get("image_url", ""))
+            # Frame reference (zip_ref only). zip_entry is the RAW path inside
+            # the ZIP from compute PR #4; absent on older compute → stored NULL
+            # and the frame endpoint matches by basename == image_name.
+            frame_ref: dict = {}
+            if zip_ref_mode and (image_name or emb.get("zip_entry")):
+                image_url = frame_url(settings.frames_public_base_url, point_id)
+                frame_ref = {
+                    "zip_url": stored_zip_url,
+                    "image_name": image_name or None,
+                    "zip_entry": emb.get("zip_entry") or None,
+                }
+            else:
+                image_url = uploaded_urls.get(image_name, emb.get("image_url", ""))
             all_image_urls.append(image_url)
 
             # Per-image weapon enrichment — see docs/weapons/03_CONSUMER.md
@@ -263,6 +298,9 @@ async def _process_embeddings_result(payload: dict, message_id: str):
                     "weapon_analyzed": weapon_analyzed,
                     "has_weapon": per_image_has_weapon,
                     "weapon_classes": per_image_classes,
+                    # zip_url / image_name / zip_entry — zip_ref only, so the
+                    # upload-mode payload stays byte-identical.
+                    **frame_ref,
                 },
             )
             embedding.id = point_id
@@ -275,6 +313,9 @@ async def _process_embeddings_result(payload: dict, message_id: str):
                     image_url=image_url,
                     json_data=embedding.metadata,
                     weapon_detections=per_image_detections if weapon_analyzed else None,
+                    zip_url=frame_ref.get("zip_url"),
+                    image_name=frame_ref.get("image_name"),
+                    zip_entry=frame_ref.get("zip_entry"),
                 )
             )
 
@@ -284,6 +325,8 @@ async def _process_embeddings_result(payload: dict, message_id: str):
                         "image_name": image_name,
                         "image_index": emb.get("image_index", 0),
                         "image_url": image_url,
+                        "zip_url": frame_ref.get("zip_url"),
+                        "zip_entry": frame_ref.get("zip_entry"),
                         "detections": per_image_detections,
                     }
                 )
@@ -312,6 +355,8 @@ async def _process_embeddings_result(payload: dict, message_id: str):
                 weapon_analysis_error=weapon_error_message,
                 category=category_db,
             )
+            # Number of embeddings stored for this evidence (both modes).
+            request.image_count = len(embeddings_data)
 
             # Link DB records to the request
             for record in db_records:
@@ -337,6 +382,7 @@ async def _process_embeddings_result(payload: dict, message_id: str):
             f"Stored {len(qdrant_embeddings)} vectors for evidence {evidence_id} "
             f"(input={payload.get('input_count')}, filtered={payload.get('filtered_count')}, "
             f"uploaded={len(uploaded_urls)}, "
+            f"frame_mode={settings.frame_storage_mode}, zip_ref={zip_ref_mode}, "
             f"weapon_analyzed={weapon_analyzed}, "
             f"has_weapon={bool(weapon_summary.get('has_weapon', False))}, "
             f"detections={weapon_summary.get('total_detections', 0)}, "
