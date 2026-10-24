@@ -143,6 +143,11 @@ def main() -> int:
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--since", default=DEFAULT_SINCE, help="first day, inclusive")
     ap.add_argument("--until", help="last day, inclusive (default today)")
+    ap.add_argument(
+        "--before",
+        help="only rows created before this UTC timestamp, e.g. the backfill start. Use it while the "
+        "consumer fix is NOT deployed yet: rows written after the backfill have no public copy.",
+    )
     ap.add_argument("--bucket", default="lucam-assets")
     ap.add_argument("--sample", type=int, default=5, help="anonymous GETs per day before COMMIT")
     ap.add_argument("--allow-unhandled", action="store_true")
@@ -206,9 +211,11 @@ def main() -> int:
             while day <= until:
                 nxt = day + dt.timedelta(days=1)
                 with conn.cursor() as cur:
+                    nxt_ts = dt.datetime.combine(nxt, dt.time())
+                    upper = min(nxt_ts, dt.datetime.fromisoformat(args.before)) if args.before else nxt_ts
                     cur.execute(
                         "SELECT id FROM embedding_requests WHERE created_at >= %s AND created_at < %s",
-                        (day, nxt),
+                        (day, upper),
                     )
                     req_ids = [r[0] for r in cur.fetchall()]
                     if not req_ids:

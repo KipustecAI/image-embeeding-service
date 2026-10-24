@@ -2,6 +2,15 @@
 
 Runs XREADGROUP in a daemon thread, bridges messages to asyncio handlers.
 Adopted from deepface-restapi pattern.
+
+`concurrency` (env STREAM_CONSUMER_CONCURRENCY) is the number of messages handled at
+once: with N > 1 the loop keeps up to N handler calls in flight on a thread pool and
+reads new messages as slots free up. Each message is acked on its own when its handler
+returns, so ordering across messages is not kept (each one is a different evidence /
+search). N = 1 is the original serial loop. Until 2026-10-15 the value was stored and
+never used: `embeddings:results` was handled one message at a time (~0.7 s each: ZIP
+download, ~10 uploads, Qdrant, DB), ~85/min, at the arrival rate, so the ~45 min
+backlog from the day's peaks never drained (lookia-online-dw #chains-streams-vllm #1180).
 """
 
 import json
@@ -10,6 +19,7 @@ import socket
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 
 import redis
 
@@ -42,7 +52,7 @@ class StreamConsumer:
         self.reclaim_idle_ms = reclaim_idle_ms
         self.dead_letter_max_retries = dead_letter_max_retries
         self.dead_letter_maxlen = dead_letter_maxlen
-        self._concurrency = concurrency
+        self._concurrency = max(1, int(concurrency))
 
         self._handlers: dict[str, Callable] = {}
         self._running = False
@@ -50,7 +60,8 @@ class StreamConsumer:
         self._last_reclaim_time = 0.0
         self._reclaim_interval = 300  # 5 minutes
 
-        # Stats
+        # Stats (updated from the handler threads when concurrency > 1)
+        self._stats_lock = threading.Lock()
         self._messages_processed = 0
         self._messages_failed = 0
         self._messages_dead_lettered = 0
@@ -83,7 +94,7 @@ class StreamConsumer:
         self._thread.start()
         logger.info(
             f"StreamConsumer started: stream={self.stream} group={self.group} "
-            f"consumer={self.consumer_name}"
+            f"consumer={self.consumer_name} concurrency={self._concurrency}"
         )
 
     def stop(self):
@@ -104,22 +115,29 @@ class StreamConsumer:
             else:
                 raise
 
+    def _read(self, count: int) -> list[tuple[str, dict]]:
+        messages = self._redis.xreadgroup(
+            groupname=self.group,
+            consumername=self.consumer_name,
+            streams={self.stream: ">"},
+            count=count,
+            block=self.block_ms,
+        )
+        return [
+            (message_id, fields)
+            for _stream_name, stream_messages in messages or []
+            for message_id, fields in stream_messages
+        ]
+
     def _consume_loop(self):
         """Main consumption loop — runs in daemon thread."""
+        if self._concurrency > 1:
+            self._consume_loop_concurrent()
+            return
         while self._running:
             try:
-                messages = self._redis.xreadgroup(
-                    groupname=self.group,
-                    consumername=self.consumer_name,
-                    streams={self.stream: ">"},
-                    count=self.batch_size,
-                    block=self.block_ms,
-                )
-
-                if messages:
-                    for _stream_name, stream_messages in messages:
-                        for message_id, fields in stream_messages:
-                            self._process_message(message_id, fields)
+                for message_id, fields in self._read(self.batch_size):
+                    self._process_message(message_id, fields)
 
                 self._maybe_reclaim()
 
@@ -129,6 +147,33 @@ class StreamConsumer:
             except Exception as e:
                 logger.error(f"Consumer loop error: {e}")
                 time.sleep(1)
+
+    def _consume_loop_concurrent(self):
+        """Up to `concurrency` messages in flight; read more as slots free up."""
+        in_flight: set[Future] = set()
+        with ThreadPoolExecutor(
+            max_workers=self._concurrency, thread_name_prefix=f"stream-handler-{self.stream}"
+        ) as pool:
+            while self._running:
+                try:
+                    in_flight = {f for f in in_flight if not f.done()}
+                    free = self._concurrency - len(in_flight)
+                    if free <= 0:
+                        wait(in_flight, timeout=1, return_when=FIRST_COMPLETED)
+                        continue
+
+                    for message_id, fields in self._read(min(self.batch_size, free)):
+                        in_flight.add(pool.submit(self._process_message, message_id, fields))
+
+                    self._maybe_reclaim()
+
+                except redis.ConnectionError as e:
+                    logger.error(f"Redis connection lost: {e}. Retrying in 5s...")
+                    time.sleep(5)
+                except Exception as e:
+                    logger.error(f"Consumer loop error: {e}")
+                    time.sleep(1)
+            # leaving the `with` waits for the handlers still running; their acks still go out
 
     def _process_message(self, message_id: str, fields: dict):
         """Dispatch message to registered handler."""
@@ -148,9 +193,11 @@ class StreamConsumer:
             payload = json.loads(payload_raw) if isinstance(payload_raw, str) else payload_raw
             handler(event_type, payload, message_id)
             self._ack(message_id)
-            self._messages_processed += 1
+            with self._stats_lock:
+                self._messages_processed += 1
         except Exception as e:
-            self._messages_failed += 1
+            with self._stats_lock:
+                self._messages_failed += 1
             logger.error(
                 f"Handler failed for {event_type} msg={message_id}: {e}",
                 exc_info=True,
@@ -222,7 +269,8 @@ class StreamConsumer:
                     approximate=True,
                 )
             self._ack(message_id)
-            self._messages_dead_lettered += 1
+            with self._stats_lock:
+                self._messages_dead_lettered += 1
             logger.warning(f"Dead-lettered message {message_id} → {dlq_stream}")
         except Exception as e:
             logger.error(f"Dead letter failed for {message_id}: {e}")
@@ -233,6 +281,7 @@ class StreamConsumer:
             "group": self.group,
             "consumer": self.consumer_name,
             "running": self._running,
+            "concurrency": self._concurrency,
             "thread_alive": self._thread.is_alive() if self._thread else False,
             "messages_processed": self._messages_processed,
             "messages_failed": self._messages_failed,

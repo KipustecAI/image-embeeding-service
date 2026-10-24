@@ -35,6 +35,7 @@ See [GATEWAY_HEADERS.md](../../lookia/microservices/video-server_microservicios_
 | — | `/api/v1/blacklist/image-entries/...` | **Blacklist (Image)** — see [BLACKLIST_API.md](BLACKLIST_API.md) for the full surface (8 endpoints) |
 | GET | `/api/v1/image-index/results/{batch_id}` | On-demand image-index: reconcile one batch (503 when feature off) |
 | GET | `/api/v1/image-index/results/by-external-id/{external_id}` | On-demand image-index: recover run(s) by external_id (`?all` bounded le=200) |
+| GET, HEAD | `/api/v1/frames/{point_id}` | **Public, no auth.** One evidence frame, read on demand from the evidence ZIP (frames desde ZIP) |
 
 ---
 
@@ -347,6 +348,47 @@ Searches created before the query vector storage feature was added are skipped (
   "total": 3,
   "skipped": 2
 }
+```
+
+---
+
+## GET / HEAD /api/v1/frames/{point_id} — Evidence Frame (public)
+
+Serves one evidence frame by its Qdrant point UUID. The bytes are read on demand from the evidence ZIP with HTTP Range (no per-frame copy in storage). With `FRAME_STORAGE_MODE=zip_ref`, ingest writes `image_url = {FRAMES_PUBLIC_BASE_URL}/api/v1/frames/{point_id}`, so this is the URL that `<img src>` loads. **Design + contract:** [frames-from-zip/DESIGN.md](frames-from-zip/DESIGN.md).
+
+**Auth:** none. This route has no X-User-* / X-API-Key dependency; the UUID is the only key.
+
+**Path parameter:** `point_id` — UUID of the Qdrant point (= `evidence_embeddings.qdrant_point_id`). Any case is accepted; it is canonicalized to lowercase.
+
+**Request headers (optional):** `If-None-Match: "<point_id>"` (also `W/"…"`, lists, `*`).
+
+**Responses:**
+
+| Status | When | Body |
+|---|---|---|
+| 200 | Frame read | Image bytes (GET) / empty (HEAD) |
+| 304 | `If-None-Match` matches the ETag (no storage read) | empty |
+| 404 | Malformed UUID, unknown point, or an old row without `zip_url` | `{"detail": "..."}` |
+| 502 | Storage error, bad ZIP, entry not in ZIP, presign failure, DB lookup failure | `{"detail": "..."}` |
+| 504 | Read took longer than `FRAMES_FETCH_TIMEOUT_S` (default 25 s) | `{"detail": "..."}` |
+
+**Success headers:**
+
+```
+Content-Type: image/jpeg            (from the entry extension: jpeg | png | webp | bmp)
+Content-Length: <exact size>
+Cache-Control: public, max-age=31536000, immutable
+ETag: "<point_id>"
+X-Content-Type-Options: nosniff
+```
+
+Error responses carry `Cache-Control: no-store` and are never cached.
+
+**HEAD** does the same lookup and frame read as GET and returns the same headers with no body. A HEAD 200 therefore means the frame is readable, and the bytes are then cached for the GET that follows.
+
+**Example:**
+```bash
+curl -sS -o frame.jpg -D - http://localhost:8001/api/v1/frames/3f2b6c1e-8a4d-4b7e-9c11-2d5e6f7a8b90
 ```
 
 ---

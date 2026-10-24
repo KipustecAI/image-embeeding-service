@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 import numpy as np
 from sqlalchemy import and_, delete
 
+from ..application.helpers.frame_refs import search_match_frame_fields
 from ..db.models.constants import (
     EmbeddingRequestStatus,
     SearchRequestStatus,
@@ -164,6 +165,8 @@ async def recalculate_searches():
                         similarity_score=match.similarity_score,
                         image_url=match.image_url,
                         match_metadata=match.metadata,
+                        # qdrant_point_id / image_name / zip_entry (frames-desde-zip)
+                        **search_match_frame_fields(match.metadata),
                     )
                 )
 

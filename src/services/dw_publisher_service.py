@@ -64,6 +64,11 @@ def _uuid_str(value: UUID | str | None) -> str | None:
     return str(value)
 
 
+def _opt(row, name: str):
+    """Nullable attribute added by frames-desde-zip (absent on old stubs → None)."""
+    return getattr(row, name, None)
+
+
 def _publish(stream: str, event_type: str, payload: dict, maxlen: int) -> None:
     """Single XADD entry point — handles missing producer + logs failures.
 
@@ -170,6 +175,11 @@ def publish_image_search_matches(
                 "similarity_score": m.similarity_score,
                 "image_url": m.image_url,
                 "match_metadata": m.match_metadata,
+                # Additive, nullable (frames-desde-zip): the matched vector and
+                # its frame reference; NULL for points ingested before zip_ref.
+                "qdrant_point_id": _match_point_id(m),
+                "image_name": _opt(m, "image_name"),
+                "zip_entry": _opt(m, "zip_entry"),
             }
             for m in matches
         ],
@@ -181,6 +191,16 @@ def publish_image_search_matches(
         payload=payload,
         maxlen=settings.dw_maxlen_image_search_match,
     )
+
+
+def _match_point_id(m) -> str | None:
+    """``search_matches.qdrant_point_id``, else the id the Qdrant search
+    injected into ``match_metadata`` (same value, rows written before the
+    column existed)."""
+    point_id = _opt(m, "qdrant_point_id")
+    if not point_id and isinstance(m.match_metadata, dict):
+        point_id = m.match_metadata.get("qdrant_point_id")
+    return str(point_id) if point_id else None
 
 
 # ── Stream 4.3: blacklist_image_entry:raw ──────────────────────────────────
@@ -299,6 +319,8 @@ def publish_image_embedding_request(event_type: str, row) -> None:
         "weapon_max_confidence": row.weapon_max_confidence,
         "weapon_summary": row.weapon_summary,
         "weapon_analysis_error": row.weapon_analysis_error,
+        # Additive, nullable (frames-desde-zip): embeddings stored for the evidence.
+        "image_count": _opt(row, "image_count"),
         "created_at": _iso(row.created_at),
         "updated_at": _iso(row.updated_at),
     }
@@ -330,6 +352,11 @@ def publish_image_embedding(row) -> None:
         "image_url": row.image_url,
         "weapon_detections": row.weapon_detections,
         "json_data": row.json_data,
+        # Additive, nullable (frames-desde-zip): frame reference inside the
+        # evidence ZIP. zip_entry is the RAW path (never URL-encoded).
+        "zip_url": _opt(row, "zip_url"),
+        "image_name": _opt(row, "image_name"),
+        "zip_entry": _opt(row, "zip_entry"),
         "created_at": _iso(row.created_at),
     }
     _publish(
