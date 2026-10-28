@@ -48,6 +48,9 @@ _EVIDENCE_PAYLOAD_INDICES: list[tuple[str, str]] = [
     # source_type already indexed above; blacklist points add blacklist_entry_id
     # so we can retrieve a specific entry's points for deletion / re-matching.
     ("blacklist_entry_id", "keyword"),
+    # Crop classifier (CLS-06): top-1 label of the crop. Points ingested before
+    # the classifier, or with it off, have no key and never match a filter.
+    ("vehicle_type", "keyword"),
 ]
 
 
