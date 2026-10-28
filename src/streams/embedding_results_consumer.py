@@ -25,6 +25,7 @@ from uuid import uuid4
 import numpy as np
 
 from ..application.helpers.category_serializer import entities_to_category
+from ..application.helpers.crop_labels import label_payload_fields, normalize_labels
 from ..application.helpers.frame_refs import frame_url, strip_cache_buster
 from ..application.helpers.source_type_filter import build_blacklist_only_filter
 from ..application.helpers.weapon_report_events import (
@@ -188,6 +189,14 @@ async def _process_embeddings_result(payload: dict, message_id: str):
     )
     trace_event = payload.get("trace_event")
 
+    # Optional crop classifier (CLS-06): message-level version, per-item labels.
+    raw_classifier_version = payload.get("classifier_version")
+    classifier_version = (
+        raw_classifier_version.strip()
+        if isinstance(raw_classifier_version, str) and raw_classifier_version.strip()
+        else None
+    )
+
     if not evidence_id or not embeddings_data:
         logger.warning(f"Skipping result with missing data: evidence_id={evidence_id}")
         return
@@ -273,6 +282,11 @@ async def _process_embeddings_result(payload: dict, message_id: str):
                 image_url = uploaded_urls.get(image_name, emb.get("image_url", ""))
             all_image_urls.append(image_url)
 
+            # Crop labels (CLS-06): None when the classifier did not run, so the
+            # Qdrant payload stays byte-identical and the DB columns stay NULL.
+            crop_labels = normalize_labels(emb.get("labels"))
+            label_fields = label_payload_fields(crop_labels, classifier_version)
+
             # Per-image weapon enrichment — see docs/weapons/03_CONSUMER.md
             per_image_detections = detections_by_name.get(image_name, [])
             per_image_has_weapon = weapon_analyzed and len(per_image_detections) > 0
@@ -301,6 +315,9 @@ async def _process_embeddings_result(payload: dict, message_id: str):
                     # zip_url / image_name / zip_entry — zip_ref only, so the
                     # upload-mode payload stays byte-identical.
                     **frame_ref,
+                    # labels / vehicle_type / vehicle_type_score /
+                    # classifier_version — only when the classifier ran.
+                    **label_fields,
                 },
             )
             embedding.id = point_id
@@ -316,6 +333,8 @@ async def _process_embeddings_result(payload: dict, message_id: str):
                     zip_url=frame_ref.get("zip_url"),
                     image_name=frame_ref.get("image_name"),
                     zip_entry=frame_ref.get("zip_entry"),
+                    labels=crop_labels,
+                    classifier_version=classifier_version if crop_labels is not None else None,
                 )
             )
 

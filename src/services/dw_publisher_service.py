@@ -30,6 +30,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from ..application.helpers.crop_labels import top_label
 from ..application.helpers.dw_hashing import name_hash
 from ..infrastructure.config import get_settings
 
@@ -344,6 +345,8 @@ def publish_image_embedding(row) -> None:
     no async update — so DW accepted dropping the UPDATE branch.
     Producer emits exactly one `.upserted` per row.
     """
+    labels = _opt(row, "labels")
+    vehicle_type, vehicle_type_score = top_label(labels)
     payload: dict[str, Any] = {
         "id": _uuid_str(row.id),
         "request_id": _uuid_str(row.request_id),
@@ -357,6 +360,12 @@ def publish_image_embedding(row) -> None:
         "zip_url": _opt(row, "zip_url"),
         "image_name": _opt(row, "image_name"),
         "zip_entry": _opt(row, "zip_entry"),
+        # Additive, nullable (CLS-06): crop labels from the CLIP worker's
+        # classifier. labels None = did not run; [] = ran, nothing passed.
+        "labels": labels,
+        "vehicle_type": vehicle_type,
+        "vehicle_type_score": vehicle_type_score,
+        "classifier_version": _opt(row, "classifier_version"),
         "created_at": _iso(row.created_at),
     }
     _publish(
