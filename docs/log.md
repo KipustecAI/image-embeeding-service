@@ -14,6 +14,19 @@ Chronological append-only record of meaningful events in the wiki and the system
 
 ---
 
+## [2026-10-28] ship + decision | Crop labels (CLS-06) BUILT (not deployed): vehicle-type label per crop from the CLIP worker
+
+Stanley (2026-10-28): image-embedding-compute adds a vehicle-type classifier to each kept crop; we own the labels (contract, storage, DW delivery). Plan `clasificacion-de-recortes` v2 (Compute Nodes - Lookia/image-embedding-compute), task CLS-06; design agreed in `export-compute#model-optimization` #3185.
+
+**Wire (additive, optional):** each `embeddings[]` item of `embeddings:results` (and `:weapon_analysis`) may carry `labels: [{"label", "score"}]`; the message may carry `classifier_version` (e.g. `vehicle_types/v20261027-202226`). Classes: `bus | motorcycle | pickup | truck | vehicle`. **`labels` absent = the classifier did not run → NULL; `[]` = it ran, nothing passed the threshold.** Malformed entries are dropped, never fail the message.
+
+**Built on `feat/crop-labels` (from `dev`):**
+- `src/application/helpers/crop_labels.py` — `normalize_labels` (validate, sort by score), `top_label`, `label_payload_fields`.
+- Qdrant payload: `labels`, `vehicle_type` (top-1, **keyword index**), `vehicle_type_score`, `classifier_version` — only when the classifier ran, so the payload is byte-identical without it.
+- Migration `c5d1e8a2f6b9`: nullable `evidence_embeddings.labels JSONB` + `classifier_version TEXT`. No backfill.
+- `image_embedding.upserted` gains nullable `labels`, `vehicle_type`, `vehicle_type_score`, `classifier_version` (also inside `json_data`).
+- Order: we ship first (no-op while labels are absent), then compute turns the classifier on. Tests: `tests/test_crop_labels.py`.
+
 ## [2026-10-21] ship + decision | Frames desde ZIP BUILT (not deployed): frames served by Range from the evidence ZIP, no more per-frame uploads
 
 Storage became read-only on 2026-10-21, which broke the per-frame upload to `public/embeddings/...` (~65k frames/h). Agreed in `#frames-desde-zip` (#1811 ZIPs permanent, #1818 proposal, #1826 public route by UUID, #1828 DW keys + `image_count`, #1829/#1831 gateway, #1822/#1823 presign + Range verified, #1821 `zip_entry` from compute PR #4). Design + contract: [`frames-from-zip/DESIGN.md`](frames-from-zip/DESIGN.md).

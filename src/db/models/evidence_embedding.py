@@ -31,6 +31,12 @@ class EvidenceEmbeddingRecord(Base):
     image_name = Column(Text, nullable=True)
     zip_entry = Column(Text, nullable=True)
 
+    # Crop labels from the CLIP worker's classifier (CLS-06). NULL = the
+    # classifier did not run; [] = it ran and no class passed its threshold.
+    # Sorted by score, highest first: [{"label": "bus", "score": 0.97}, ...].
+    labels = Column(JSONB, nullable=True)
+    classifier_version = Column(Text, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # Relationships
