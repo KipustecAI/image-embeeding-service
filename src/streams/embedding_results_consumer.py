@@ -424,7 +424,18 @@ async def _process_embeddings_result(payload: dict, message_id: str):
         # report-generation service. Report generation is non-critical —
         # a publish failure must never break ingest. See
         # docs/requirements/REPORT_GENERATION_STREAMS.md §2.7.
-        if weapon_analyzed and report_images_with_detections and _stream_producer is not None:
+        # The weapons compute only INFORMS whether an alert must be sent
+        # (`summary.alert_required`, true only if its Qwen check confirmed the weapon).
+        # No flag = legacy producer: keep the old behaviour (publish whenever detections exist).
+        alert_required = weapon_summary.get("alert_required")
+        if weapon_analyzed and alert_required is False:
+            logger.info(f"weapons.detected not published for {evidence_id}: compute did not require an alert")
+        if (
+            weapon_analyzed
+            and alert_required is not False
+            and report_images_with_detections
+            and _stream_producer is not None
+        ):
             try:
                 event = build_weapons_detected_event(
                     evidence_id=evidence_id,
