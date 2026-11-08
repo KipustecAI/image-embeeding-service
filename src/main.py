@@ -7,6 +7,7 @@ Stores directly in Qdrant + PostgreSQL — no ARQ queue for the happy path.
 import asyncio
 import json
 import logging
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -783,7 +784,10 @@ def main():
         "src.main:app",
         host="0.0.0.0",
         port=8001,
-        reload=settings.environment == "development",
+        # Auto-reload only when asked for explicitly. In a container the reloader
+        # stays alive after a failed startup (e.g. Qdrant not up yet after a host
+        # reboot), so the container never exits and Docker never restarts it.
+        reload=os.getenv("UVICORN_RELOAD") == "1",
         log_level=settings.log_level.lower(),
     )
 
