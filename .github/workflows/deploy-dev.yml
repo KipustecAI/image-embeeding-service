@@ -109,32 +109,24 @@ jobs:
     env:
       EXPECTED_SHA: ${{ needs.verify-ci.outputs.sha }}
     steps:
-      - name: Deploy exact revision through guarded orchestrator procedure
+      # Forced commands of the despliegue-lookia account (platform, 2026-11): one line each, no shell.
+      - name: Update the checkout on the VPS
         uses: appleboy/ssh-action@v1.0.3
-        env:
-          EXPECTED_SHA: ${{ env.EXPECTED_SHA }}
         with:
           host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
+          username: despliegue-lookia
           key: ${{ secrets.SERVER_SSH_KEY }}
           port: ${{ secrets.SERVER_PORT }}
           timeout: 60s
-          command_timeout: 30m
-          envs: EXPECTED_SHA
-          script: |
-            set -euo pipefail
-
-            repo=/root/projects/microservices/image-embeeding-service
-            test "$(hostname -s)" = srv917124
-            cd "$repo"
-            git diff --quiet
-            git diff --cached --quiet
-            git fetch origin dev
-            if git show-ref --verify --quiet refs/heads/dev; then
-              git switch dev
-            else
-              git switch -c dev --track origin/dev
-            fi
-            git pull --ff-only origin dev
-            test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-            ./scripts/deploy-lookia.sh dev
+          command_timeout: 40m
+          script: actualizar-checkout-image-embeeding-service
+      - name: Deploy the exact revision
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: despliegue-lookia
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT }}
+          timeout: 60s
+          command_timeout: 40m
+          script: desplegar-dev-image-embeeding-service ${{ env.EXPECTED_SHA }}
