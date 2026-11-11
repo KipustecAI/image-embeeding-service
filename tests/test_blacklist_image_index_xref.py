@@ -36,8 +36,17 @@ class _FakeCM:
         return False
 
 
-def _hit(*, point_id="p-idx-1", score=0.9, external_id="run-1", model_version="clip-vit-b-32",
-         item_index=3, item_ref="ref-1", source_url="http://img/1.jpg", batch_id="b-1"):
+def _hit(
+    *,
+    point_id="p-idx-1",
+    score=0.9,
+    external_id="run-1",
+    model_version="clip-vit-b-32",
+    item_index=3,
+    item_ref="ref-1",
+    source_url="http://img/1.jpg",
+    batch_id="b-1",
+):
     """A search_similar() result dict (shape from ImageIndexVectorRepository._hit_to_match)."""
     return {
         "external_id": external_id,
@@ -349,9 +358,7 @@ async def test_auto_hook_fires_after_terminal_publish(monkeypatch):
     service.land_computed = AsyncMock(return_value=lifecycle)
     monkeypatch.setattr(cons, "ImageIndexService", lambda: service)
     monkeypatch.setattr(cons, "get_session", lambda: _FakeCM(MagicMock()))
-    monkeypatch.setattr(
-        cons, "_publish_lifecycle", lambda et, p: order.append(("publish", et))
-    )
+    monkeypatch.setattr(cons, "_publish_lifecycle", lambda et, p: order.append(("publish", et)))
 
     async def _fake_autocheck(lc):
         order.append(("autocheck", lc["batch_id"]))
@@ -415,9 +422,7 @@ async def test_auto_hook_publishes_additive_event(monkeypatch):
         "similarity_score": 0.91,
         "threshold_used": 0.85,
     }
-    monkeypatch.setattr(
-        xref, "cross_reference_entry", AsyncMock(return_value=[match_dict])
-    )
+    monkeypatch.setattr(xref, "cross_reference_entry", AsyncMock(return_value=[match_dict]))
     published_events = []
 
     async def _fake_publish(**kwargs):
@@ -561,9 +566,7 @@ def test_rest_200_returns_matches(rest_client, monkeypatch):
         "similarity_score": 0.91,
         "threshold_used": 0.85,
     }
-    monkeypatch.setattr(
-        bl_router, "cross_reference_entry", AsyncMock(return_value=[match_dict])
-    )
+    monkeypatch.setattr(bl_router, "cross_reference_entry", AsyncMock(return_value=[match_dict]))
 
     r = client.post(
         f"/api/v1/blacklist/image-entries/{entry_id}/cross-reference",

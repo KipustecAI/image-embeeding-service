@@ -82,9 +82,7 @@ async def recover_stale_working():
                 if r.processing_started_at and r.processing_started_at < image_index_cutoff:
                     r.status = SearchRequestStatus.ERROR
                     r.error_message = "Image-index compute timed out (stale WORKING)"
-                    logger.error(
-                        "Terminalized stale image-index search %s to ERROR", r.search_id
-                    )
+                    logger.error("Terminalized stale image-index search %s to ERROR", r.search_id)
                 # else: not yet past the image-index cutoff — leave WORKING.
                 continue
             # ── evidence rows: existing reset logic, untouched ──
@@ -209,9 +207,7 @@ async def _recalculate_image_index_searches():
                 continue
             query_vector = await _vector_repo.retrieve_query_vector(s.qdrant_query_point_id)
             if query_vector is None:
-                logger.warning(
-                    "Query vector not found for image-index search %s", s.search_id
-                )
+                logger.warning("Query vector not found for image-index search %s", s.search_id)
                 continue
 
             matches = await _image_index_vector_repo.search_similar(

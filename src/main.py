@@ -299,9 +299,7 @@ async def lifespan(app: FastAPI):
         # auto-on-land hook stays inert until image_index_blacklist_autocheck_enabled.
         set_xref_evidence_repo(vector_repo)
         set_xref_image_index_repo(image_index_vector_repo)
-        logger.info(
-            "Image-index on-demand flow ENABLED (results→submit consumers + reaper)"
-        )
+        logger.info("Image-index on-demand flow ENABLED (results→submit consumers + reaper)")
 
     logger.info("Image Embedding Backend ready")
 

@@ -33,7 +33,9 @@ from ..base import Base
 # Batch status vocabulary — kept in sync with ImageIndexBatchStatus in constants.py.
 _BATCH_STATUS_CK = "status IN ('pending','computing','completed','completed_with_errors','error')"
 # Result status vocabulary — kept in sync with ImageIndexResultStatus in constants.py.
-_RESULT_STATUS_CK = "status IN ('embedded','download_failed','decode_failed','filtered','no_result')"
+_RESULT_STATUS_CK = (
+    "status IN ('embedded','download_failed','decode_failed','filtered','no_result')"
+)
 
 
 class ImageIndexBatch(Base):
@@ -86,9 +88,7 @@ class ImageIndexBatch(Base):
         cascade="all, delete-orphan",
     )
 
-    __table_args__ = (
-        CheckConstraint(_BATCH_STATUS_CK, name="ck_image_index_batches_status"),
-    )
+    __table_args__ = (CheckConstraint(_BATCH_STATUS_CK, name="ck_image_index_batches_status"),)
 
     def __repr__(self) -> str:
         return (

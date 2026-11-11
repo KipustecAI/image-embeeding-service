@@ -22,9 +22,7 @@ class SearchRequest(Base):
 
     # Discriminator (image-index SEARCH — 02_SEARCH_DESIGN §1/§4). Backfills to
     # 'evidence' via server_default; every evidence caller stays byte-identical.
-    search_type = Column(
-        String(32), nullable=False, server_default="evidence", index=True
-    )
+    search_type = Column(String(32), nullable=False, server_default="evidence", index=True)
     # Capability-A query external_ids list — NULL for every evidence row (§4, M4).
     external_ids = Column(JSONB, nullable=True)
 

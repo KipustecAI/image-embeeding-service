@@ -271,9 +271,7 @@ async def _process_search_result(payload: dict, message_id: str):
             publish_image_search_request("image_search.failed", failed_request)
 
 
-async def _mark_image_index_search_error(
-    search_id: str, message: str
-) -> None:
+async def _mark_image_index_search_error(search_id: str, message: str) -> None:
     """Terminalize an image-index search row to ERROR. Never re-raises (M8)."""
     try:
         async with get_session() as session:
@@ -312,9 +310,7 @@ async def _process_image_index_search_result(payload: dict, message_id: str):
                 "image-index search %s: dedicated repo not wired — marking ERROR",
                 search_id,
             )
-            await _mark_image_index_search_error(
-                search_id, "image-index repo unavailable"
-            )
+            await _mark_image_index_search_error(search_id, "image-index repo unavailable")
             return
 
         # Guard 2: degenerate query vector (§3/S4).
@@ -338,9 +334,7 @@ async def _process_image_index_search_result(payload: dict, message_id: str):
 
         total_matches = len(matches)
         similarity_status = (
-            SimilarityStatus.MATCHES_FOUND
-            if total_matches > 0
-            else SimilarityStatus.NO_MATCHES
+            SimilarityStatus.MATCHES_FOUND if total_matches > 0 else SimilarityStatus.NO_MATCHES
         )
 
         # Store the query vector on the LIVE repo (search_queries collection) so
@@ -416,9 +410,7 @@ async def _process_image_index_search_result(payload: dict, message_id: str):
         )
 
     except Exception as e:  # noqa: BLE001 — never re-raise into the shared consumer
-        logger.error(
-            "Failed to process image-index search %s: %s", search_id, e, exc_info=True
-        )
+        logger.error("Failed to process image-index search %s: %s", search_id, e, exc_info=True)
         await _mark_image_index_search_error(search_id, str(e))
 
 

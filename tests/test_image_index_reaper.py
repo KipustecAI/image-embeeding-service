@@ -78,8 +78,12 @@ def producer(monkeypatch):
 
 async def test_flag_off_returns_without_opening_session(producer):
     get_session = MagicMock()
-    with patch.object(reaper, "get_settings", return_value=_fake_settings(image_index_enabled=False)), \
-         patch.object(reaper, "get_session", get_session):
+    with (
+        patch.object(
+            reaper, "get_settings", return_value=_fake_settings(image_index_enabled=False)
+        ),
+        patch.object(reaper, "get_session", get_session),
+    ):
         await reaper.reap_stuck_image_index_batches()
     get_session.assert_not_called()
     producer.publish.assert_not_called()
@@ -91,9 +95,11 @@ async def test_flag_off_returns_without_opening_session(producer):
 async def test_marks_and_publishes_each_stuck_batch(producer):
     stuck = [_fake_batch("b1"), _fake_batch("b2")]
     repo = _patch_repo(stuck)
-    with patch.object(reaper, "get_settings", return_value=_fake_settings()), \
-         patch.object(reaper, "get_session", _fake_session_cm), \
-         patch.object(reaper, "ImageIndexRepository", return_value=repo):
+    with (
+        patch.object(reaper, "get_settings", return_value=_fake_settings()),
+        patch.object(reaper, "get_session", _fake_session_cm),
+        patch.object(reaper, "ImageIndexRepository", return_value=repo),
+    ):
         await reaper.reap_stuck_image_index_batches()
 
     # Each stuck batch terminalized as 'error' with the timeout message.
@@ -114,9 +120,11 @@ async def test_publish_raise_does_not_abort_loop(producer):
     repo = _patch_repo(stuck)
     # First publish raises; the second must still be attempted.
     producer.publish.side_effect = [RuntimeError("redis down"), None]
-    with patch.object(reaper, "get_settings", return_value=_fake_settings()), \
-         patch.object(reaper, "get_session", _fake_session_cm), \
-         patch.object(reaper, "ImageIndexRepository", return_value=repo):
+    with (
+        patch.object(reaper, "get_settings", return_value=_fake_settings()),
+        patch.object(reaper, "get_session", _fake_session_cm),
+        patch.object(reaper, "ImageIndexRepository", return_value=repo),
+    ):
         await reaper.reap_stuck_image_index_batches()  # must NOT raise
 
     # Both batches marked (DB commit happens regardless of publish outcome) and
@@ -127,9 +135,11 @@ async def test_publish_raise_does_not_abort_loop(producer):
 
 async def test_no_stuck_batches_no_publish(producer):
     repo = _patch_repo([])
-    with patch.object(reaper, "get_settings", return_value=_fake_settings()), \
-         patch.object(reaper, "get_session", _fake_session_cm), \
-         patch.object(reaper, "ImageIndexRepository", return_value=repo):
+    with (
+        patch.object(reaper, "get_settings", return_value=_fake_settings()),
+        patch.object(reaper, "get_session", _fake_session_cm),
+        patch.object(reaper, "ImageIndexRepository", return_value=repo),
+    ):
         await reaper.reap_stuck_image_index_batches()
     repo.mark_failed.assert_not_awaited()
     producer.publish.assert_not_called()
@@ -139,9 +149,11 @@ async def test_no_producer_wired_marks_but_skips_publish(monkeypatch):
     monkeypatch.setattr(reaper, "_producer", None)
     stuck = [_fake_batch("b1")]
     repo = _patch_repo(stuck)
-    with patch.object(reaper, "get_settings", return_value=_fake_settings()), \
-         patch.object(reaper, "get_session", _fake_session_cm), \
-         patch.object(reaper, "ImageIndexRepository", return_value=repo):
+    with (
+        patch.object(reaper, "get_settings", return_value=_fake_settings()),
+        patch.object(reaper, "get_session", _fake_session_cm),
+        patch.object(reaper, "ImageIndexRepository", return_value=repo),
+    ):
         await reaper.reap_stuck_image_index_batches()  # must NOT raise
     # Batch still terminalized even though nothing can be published.
     repo.mark_failed.assert_awaited_once()

@@ -67,9 +67,10 @@ def test_handler_timeouts():
 async def test_computed_happy_path_publishes_completed(producer, vector_repo):
     lifecycle = {"batch_id": "b1", "status": "completed"}
     payload = {"batch_id": "b1", "results": []}
-    with patch.object(rc, "get_session", _fake_session_cm), patch.object(
-        ImageIndexService, "land_computed", AsyncMock(return_value=lifecycle)
-    ) as land:
+    with (
+        patch.object(rc, "get_session", _fake_session_cm),
+        patch.object(ImageIndexService, "land_computed", AsyncMock(return_value=lifecycle)) as land,
+    ):
         await rc._process_computed(payload, "msg-1")
 
     # land called with the DEDICATED vector_repo.
@@ -86,8 +87,9 @@ async def test_computed_happy_path_publishes_completed(producer, vector_repo):
 
 async def test_computed_unaccounted_does_not_publish(producer, vector_repo):
     """land returns None (never-minted or not-yet-accounted) → ACK no-op."""
-    with patch.object(rc, "get_session", _fake_session_cm), patch.object(
-        ImageIndexService, "land_computed", AsyncMock(return_value=None)
+    with (
+        patch.object(rc, "get_session", _fake_session_cm),
+        patch.object(ImageIndexService, "land_computed", AsyncMock(return_value=None)),
     ):
         await rc._process_computed({"batch_id": "b1", "results": []}, "msg-2")
     producer.publish.assert_not_called()
@@ -95,10 +97,13 @@ async def test_computed_unaccounted_does_not_publish(producer, vector_repo):
 
 async def test_computed_land_raise_propagates(producer, vector_repo):
     """Unknown encoding / Qdrant failure raises → message NOT ACKed (PEL/DLQ)."""
-    with patch.object(rc, "get_session", _fake_session_cm), patch.object(
-        ImageIndexService,
-        "land_computed",
-        AsyncMock(side_effect=ValueError("unknown vector_encoding")),
+    with (
+        patch.object(rc, "get_session", _fake_session_cm),
+        patch.object(
+            ImageIndexService,
+            "land_computed",
+            AsyncMock(side_effect=ValueError("unknown vector_encoding")),
+        ),
     ):
         with pytest.raises(ValueError, match="unknown vector_encoding"):
             await rc._process_computed({"batch_id": "b1", "results": []}, "msg-3")
@@ -111,9 +116,12 @@ async def test_computed_land_raise_propagates(producer, vector_repo):
 async def test_compute_error_publishes_failed(producer, vector_repo):
     lifecycle = {"batch_id": "b1", "status": "error", "error_message": "boom"}
     payload = {"batch_id": "b1", "error_message": "boom"}
-    with patch.object(rc, "get_session", _fake_session_cm), patch.object(
-        ImageIndexService, "mark_error_from_compute_error", AsyncMock(return_value=lifecycle)
-    ) as mark:
+    with (
+        patch.object(rc, "get_session", _fake_session_cm),
+        patch.object(
+            ImageIndexService, "mark_error_from_compute_error", AsyncMock(return_value=lifecycle)
+        ) as mark,
+    ):
         await rc._process_compute_error(payload, "msg-err")
 
     mark.assert_awaited_once()
@@ -126,8 +134,11 @@ async def test_compute_error_publishes_failed(producer, vector_repo):
 
 
 async def test_compute_error_never_minted_is_noop(producer, vector_repo):
-    with patch.object(rc, "get_session", _fake_session_cm), patch.object(
-        ImageIndexService, "mark_error_from_compute_error", AsyncMock(return_value=None)
+    with (
+        patch.object(rc, "get_session", _fake_session_cm),
+        patch.object(
+            ImageIndexService, "mark_error_from_compute_error", AsyncMock(return_value=None)
+        ),
     ):
         await rc._process_compute_error({"batch_id": "nope", "error_message": "x"}, "msg-e2")
     producer.publish.assert_not_called()

@@ -90,16 +90,25 @@ async def test_upsert_result_and_recompute_counts_absolute(session):
     await session.flush()
 
     await repo.upsert_result(
-        batch_id=batch.id, item_index=0, item_ref="a",
-        status=ImageIndexResultStatus.EMBEDDED, qdrant_point_id="pid-0",
+        batch_id=batch.id,
+        item_index=0,
+        item_ref="a",
+        status=ImageIndexResultStatus.EMBEDDED,
+        qdrant_point_id="pid-0",
     )
     await repo.upsert_result(
-        batch_id=batch.id, item_index=1, item_ref="b",
-        status=ImageIndexResultStatus.DOWNLOAD_FAILED, error_message="http 404",
+        batch_id=batch.id,
+        item_index=1,
+        item_ref="b",
+        status=ImageIndexResultStatus.DOWNLOAD_FAILED,
+        error_message="http 404",
     )
     await repo.upsert_result(
-        batch_id=batch.id, item_index=2, item_ref="c",
-        status=ImageIndexResultStatus.FILTERED, duplicate_of_index=0,
+        batch_id=batch.id,
+        item_index=2,
+        item_ref="c",
+        status=ImageIndexResultStatus.FILTERED,
+        duplicate_of_index=0,
     )
     counts = await repo.recompute_counts(batch.id)
     assert counts == {"submitted": 3, "embedded": 1, "filtered": 1, "failed": 1}
@@ -107,8 +116,11 @@ async def test_upsert_result_and_recompute_counts_absolute(session):
     # Redelivery of item 1 flips it to embedded — counts recomputed ABSOLUTELY,
     # never incremented (still 3 rows total).
     await repo.upsert_result(
-        batch_id=batch.id, item_index=1, item_ref="b",
-        status=ImageIndexResultStatus.EMBEDDED, qdrant_point_id="pid-1",
+        batch_id=batch.id,
+        item_index=1,
+        item_ref="b",
+        status=ImageIndexResultStatus.EMBEDDED,
+        qdrant_point_id="pid-1",
     )
     counts2 = await repo.recompute_counts(batch.id)
     assert counts2 == {"submitted": 3, "embedded": 2, "filtered": 1, "failed": 0}

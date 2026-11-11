@@ -351,9 +351,7 @@ class ImageIndexService:
         # A batch we never minted (results leg never mints) → ACK no-op.
         batch = await session.get(ImageIndexBatch, batch_uuid)
         if batch is None:
-            logger.warning(
-                "land_computed: batch_id %s never minted — ACK no-op", batch_uuid
-            )
+            logger.warning("land_computed: batch_id %s never minted — ACK no-op", batch_uuid)
             return None
 
         from ..infrastructure.vector_db.image_index_vector_repository import (
