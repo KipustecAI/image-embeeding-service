@@ -83,7 +83,5 @@ class StorageUploader:
                     exc_info=True,
                 )
                 return None
-        logger.error(
-            f"Storage upload exhausted retries for {filename}: {last_exc_label}"
-        )
+        logger.error(f"Storage upload exhausted retries for {filename}: {last_exc_label}")
         return None

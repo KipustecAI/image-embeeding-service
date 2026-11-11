@@ -39,10 +39,7 @@ def test_terminal_zero_results_stays_computing():
 
 def test_terminal_all_embedded_completed():
     """Fully accounted, no failures → completed."""
-    assert (
-        ImageIndexService.terminal_status(_counts(3, 3, 0, 0))
-        == ImageIndexBatchStatus.COMPLETED
-    )
+    assert ImageIndexService.terminal_status(_counts(3, 3, 0, 0)) == ImageIndexBatchStatus.COMPLETED
 
 
 def test_terminal_with_failure_completed_with_errors():
@@ -55,10 +52,7 @@ def test_terminal_with_failure_completed_with_errors():
 
 def test_terminal_filtered_is_not_a_downgrade():
     """filtered counts toward accounting and is clean — no failures → completed."""
-    assert (
-        ImageIndexService.terminal_status(_counts(3, 1, 2, 0))
-        == ImageIndexBatchStatus.COMPLETED
-    )
+    assert ImageIndexService.terminal_status(_counts(3, 1, 2, 0)) == ImageIndexBatchStatus.COMPLETED
 
 
 def test_terminal_filtered_accounts_but_failure_downgrades():
@@ -85,10 +79,7 @@ def test_terminal_never_returns_error():
 
 def test_terminal_empty_batch_completed():
     """submitted==0 (edge) → accounted (0>=0), no failures → completed."""
-    assert (
-        ImageIndexService.terminal_status(_counts(0, 0, 0, 0))
-        == ImageIndexBatchStatus.COMPLETED
-    )
+    assert ImageIndexService.terminal_status(_counts(0, 0, 0, 0)) == ImageIndexBatchStatus.COMPLETED
 
 
 def test_terminal_missing_keys_default_zero():

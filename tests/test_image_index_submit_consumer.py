@@ -222,7 +222,9 @@ async def test_fresh_mint_dispatches_once_and_publishes_created(producer):
     created_payload = producer.publish.call_args_list[1].kwargs["payload"]
     assert created_payload["status"] == ImageIndexBatchStatus.COMPUTING
     # lifecycle publish is MAXLEN-trimmed.
-    assert producer.publish.call_args_list[1].kwargs["maxlen"] == sc.settings.image_index_batch_maxlen
+    assert (
+        producer.publish.call_args_list[1].kwargs["maxlen"] == sc.settings.image_index_batch_maxlen
+    )
     create_error.assert_not_called()
 
 
@@ -306,8 +308,9 @@ async def test_submit_batch_created_returns_atomic_outcome():
     batch = _fake_batch()
     fake_repo = MagicMock()
     fake_repo.create_or_get_batch = AsyncMock(return_value=(batch, True))
-    with patch.object(service_mod, "get_session", _fake_session_cm), patch.object(
-        service_mod, "ImageIndexRepository", return_value=fake_repo
+    with (
+        patch.object(service_mod, "get_session", _fake_session_cm),
+        patch.object(service_mod, "ImageIndexRepository", return_value=fake_repo),
     ):
         result_batch, created, error = await ImageIndexService().submit_batch_created(
             _submit_payload()
@@ -337,8 +340,9 @@ async def test_create_error_batch_sets_error_status_and_message():
     batch = _fake_batch()
     fake_repo = MagicMock()
     fake_repo.create_or_get_batch = AsyncMock(return_value=(batch, True))
-    with patch.object(service_mod, "get_session", _fake_session_cm), patch.object(
-        service_mod, "ImageIndexRepository", return_value=fake_repo
+    with (
+        patch.object(service_mod, "get_session", _fake_session_cm),
+        patch.object(service_mod, "ImageIndexRepository", return_value=fake_repo),
     ):
         out = await ImageIndexService().create_error_batch(
             _submit_payload(), "batch exceeds N_CAP=100 (got 137)"

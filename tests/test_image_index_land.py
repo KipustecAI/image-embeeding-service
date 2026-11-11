@@ -90,9 +90,7 @@ async def _land(payload, batch, counts, *, vector_ok: bool = True):
     repo.upsert_result = AsyncMock()
     repo.recompute_counts = AsyncMock(return_value=counts)
     with patch(_SVC, return_value=repo):
-        result = await ImageIndexService().land_computed(
-            session, payload, vector_repo=vector_repo
-        )
+        result = await ImageIndexService().land_computed(session, payload, vector_repo=vector_repo)
     return result, repo, vector_repo, session
 
 
@@ -335,9 +333,7 @@ async def test_never_minted_batch_returns_none():
     repo.upsert_result = AsyncMock()
     repo.recompute_counts = AsyncMock()
     with patch(_SVC, return_value=repo):
-        result = await ImageIndexService().land_computed(
-            session, payload, vector_repo=vector_repo
-        )
+        result = await ImageIndexService().land_computed(session, payload, vector_repo=vector_repo)
     assert result is None
     repo.upsert_result.assert_not_awaited()
     repo.recompute_counts.assert_not_awaited()
@@ -351,9 +347,7 @@ async def test_unparseable_batch_id_returns_none():
     vector_repo = MagicMock()
     vector_repo.upsert_items = AsyncMock()
     with patch(_SVC, return_value=MagicMock()):
-        result = await ImageIndexService().land_computed(
-            session, payload, vector_repo=vector_repo
-        )
+        result = await ImageIndexService().land_computed(session, payload, vector_repo=vector_repo)
     assert result is None
     session.get.assert_not_awaited()
 
