@@ -7,6 +7,7 @@ Stores directly in Qdrant + PostgreSQL — no ARQ queue for the happy path.
 import asyncio
 import json
 import logging
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -298,9 +299,7 @@ async def lifespan(app: FastAPI):
         # auto-on-land hook stays inert until image_index_blacklist_autocheck_enabled.
         set_xref_evidence_repo(vector_repo)
         set_xref_image_index_repo(image_index_vector_repo)
-        logger.info(
-            "Image-index on-demand flow ENABLED (results→submit consumers + reaper)"
-        )
+        logger.info("Image-index on-demand flow ENABLED (results→submit consumers + reaper)")
 
     logger.info("Image Embedding Backend ready")
 
@@ -783,7 +782,10 @@ def main():
         "src.main:app",
         host="0.0.0.0",
         port=8001,
-        reload=settings.environment == "development",
+        # Auto-reload only when asked for explicitly. In a container the reloader
+        # stays alive after a failed startup (e.g. Qdrant not up yet after a host
+        # reboot), so the container never exits and Docker never restarts it.
+        reload=os.getenv("UVICORN_RELOAD") == "1",
         log_level=settings.log_level.lower(),
     )
 

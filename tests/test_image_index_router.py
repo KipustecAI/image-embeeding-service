@@ -106,9 +106,7 @@ def test_get_batch_503_when_flag_off(client_raw):
 
 
 def test_by_external_id_503_when_flag_off(client_raw):
-    r = client_raw.get(
-        "/api/v1/image-index/results/by-external-id/run-42", headers=HEADERS
-    )
+    r = client_raw.get("/api/v1/image-index/results/by-external-id/run-42", headers=HEADERS)
     assert r.status_code == 503
 
 
@@ -154,9 +152,7 @@ def test_get_batch_404_cross_tenant(client_enabled, mock_repo):
 
 def test_by_external_id_single_404(client_enabled, mock_repo):
     mock_repo.get_latest_by_external_id.return_value = None
-    r = client_enabled.get(
-        "/api/v1/image-index/results/by-external-id/run-42", headers=HEADERS
-    )
+    r = client_enabled.get("/api/v1/image-index/results/by-external-id/run-42", headers=HEADERS)
     assert r.status_code == 404
 
 
@@ -173,9 +169,7 @@ def test_by_external_id_all_404_when_empty(client_enabled, mock_repo):
 
 def test_get_batch_200_counts_only(client_enabled, mock_repo):
     mock_repo.get_batch.return_value = _fake_batch()
-    r = client_enabled.get(
-        f"/api/v1/image-index/results/{BATCH_ID}", headers=HEADERS
-    )
+    r = client_enabled.get(f"/api/v1/image-index/results/{BATCH_ID}", headers=HEADERS)
     assert r.status_code == 200
     body = r.json()
     assert body["batch_id"] == BATCH_ID
@@ -224,9 +218,7 @@ def test_get_batch_200_with_items(client_enabled, mock_repo):
 
 def test_by_external_id_single_200(client_enabled, mock_repo):
     mock_repo.get_latest_by_external_id.return_value = _fake_batch()
-    r = client_enabled.get(
-        "/api/v1/image-index/results/by-external-id/run-42", headers=HEADERS
-    )
+    r = client_enabled.get("/api/v1/image-index/results/by-external-id/run-42", headers=HEADERS)
     assert r.status_code == 200
     body = r.json()
     assert body["batch_id"] == BATCH_ID
@@ -272,7 +264,5 @@ def test_by_external_id_all_is_bounded(client_enabled, mock_repo):
 
 def test_get_batch_422_limit_over_cap(client_enabled, mock_repo):
     mock_repo.get_batch.return_value = _fake_batch()
-    r = client_enabled.get(
-        f"/api/v1/image-index/results/{BATCH_ID}?limit=501", headers=HEADERS
-    )
+    r = client_enabled.get(f"/api/v1/image-index/results/{BATCH_ID}?limit=501", headers=HEADERS)
     assert r.status_code == 422

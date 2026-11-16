@@ -414,7 +414,7 @@ async def cross_reference(
     body: CrossReferenceRequest,
     ctx: UserContext = Depends(get_user_context),
 ) -> CrossReferenceResponse:
-    """"Does this blacklisted image appear in these indexed runs?" — SYNC (§7.3).
+    """ "Does this blacklisted image appear in these indexed runs?" — SYNC (§7.3).
 
     GPU-free + bounded, so the result is returned inline (no 202/poll). Reuses the
     entry's already-stored CLIP vectors and reverse-searches the dedicated

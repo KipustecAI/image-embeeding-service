@@ -34,14 +34,18 @@ async def _truncate_image_index_tables() -> None:
     try:
         async with engine.begin() as conn:
             existing = (
-                await conn.execute(
-                    text(
-                        "SELECT table_name FROM information_schema.tables "
-                        "WHERE table_schema = 'public' AND table_name = ANY(:names)"
-                    ),
-                    {"names": list(_IMAGE_INDEX_TABLES)},
+                (
+                    await conn.execute(
+                        text(
+                            "SELECT table_name FROM information_schema.tables "
+                            "WHERE table_schema = 'public' AND table_name = ANY(:names)"
+                        ),
+                        {"names": list(_IMAGE_INDEX_TABLES)},
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             if not existing:
                 return
             # CASCADE handles the results→batches FK ordering regardless of order.
@@ -69,21 +73,23 @@ async def _delete_image_index_search_rows() -> None:
     try:
         async with engine.begin() as conn:
             existing = (
-                await conn.execute(
-                    text(
-                        "SELECT table_name FROM information_schema.tables "
-                        "WHERE table_schema = 'public' AND table_name = ANY(:names)"
-                    ),
-                    {"names": ["search_requests", "search_matches"]},
+                (
+                    await conn.execute(
+                        text(
+                            "SELECT table_name FROM information_schema.tables "
+                            "WHERE table_schema = 'public' AND table_name = ANY(:names)"
+                        ),
+                        {"names": ["search_requests", "search_matches"]},
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             if "search_requests" not in existing:
                 return
             # Matches first (FK to search_requests). Both predicates are
             # image-index-only — evidence rows are never touched.
-            await conn.execute(
-                text("DELETE FROM search_matches WHERE external_id IS NOT NULL")
-            )
+            await conn.execute(text("DELETE FROM search_matches WHERE external_id IS NOT NULL"))
             await conn.execute(
                 text("DELETE FROM search_requests WHERE search_type = 'image_index'")
             )

@@ -73,6 +73,7 @@ def _is_finite_nonzero(vec) -> bool:
         total += f * f
     return total > 0.0
 
+
 # ids-only, face-style payload: the 512-D vector IS the payload. Keyword indices
 # ONLY on the filter fields; item_index/item_ref/source_url are stored-but-unindexed.
 _IMAGE_INDEX_PAYLOAD_INDICES: list[tuple[str, str]] = [
@@ -126,9 +127,7 @@ class ImageIndexVectorRepository:
                 logger.info("Creating image-index collection '%s'", self.collection_name)
                 self.client.create_collection(
                     collection_name=self.collection_name,
-                    vectors_config=VectorParams(
-                        size=self.vector_size, distance=Distance.COSINE
-                    ),
+                    vectors_config=VectorParams(size=self.vector_size, distance=Distance.COSINE),
                 )
                 logger.info("Collection '%s' created", self.collection_name)
             else:
@@ -205,9 +204,7 @@ class ImageIndexVectorRepository:
         try:
             ok = await asyncio.to_thread(_sync_upsert)
             if ok:
-                logger.info(
-                    "Upserted %d points into %s", len(structs), self.collection_name
-                )
+                logger.info("Upserted %d points into %s", len(structs), self.collection_name)
             return ok
         except Exception as e:  # noqa: BLE001
             logger.error("Error upserting %d image-index points: %s", len(structs), e)
@@ -270,9 +267,7 @@ class ImageIndexVectorRepository:
             return []
         vec = query_vector.tolist() if hasattr(query_vector, "tolist") else list(query_vector)
         if not _is_finite_nonzero(vec):
-            logger.warning(
-                "search_similar skipped: zero/NaN query vector (user=%s)", user_id
-            )
+            logger.warning("search_similar skipped: zero/NaN query vector (user=%s)", user_id)
             return []
 
         must = [FieldCondition(key="user_id", match=MatchValue(value=str(user_id)))]
@@ -283,9 +278,7 @@ class ImageIndexVectorRepository:
                 )
             )
         if batch_id:
-            must.append(
-                FieldCondition(key="batch_id", match=MatchValue(value=str(batch_id)))
-            )
+            must.append(FieldCondition(key="batch_id", match=MatchValue(value=str(batch_id))))
         query_filter = Filter(must=must)
 
         def _sync():

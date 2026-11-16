@@ -81,13 +81,9 @@ async def require_image_index_enabled() -> None:
     """
     settings = get_settings()
     if not settings.image_index_enabled:
-        raise HTTPException(
-            status_code=503, detail="Image-index feature is disabled"
-        )
+        raise HTTPException(status_code=503, detail="Image-index feature is disabled")
     if not _repo_available:
-        raise HTTPException(
-            status_code=503, detail="Image-index repository unavailable"
-        )
+        raise HTTPException(status_code=503, detail="Image-index repository unavailable")
 
 
 # ── Capability A search gate (02_SEARCH_DESIGN §6.1) ─────────────────────────
@@ -120,13 +116,9 @@ async def require_image_index_search_enabled() -> None:
     """
     settings = get_settings()
     if not settings.image_index_search_enabled:
-        raise HTTPException(
-            status_code=503, detail="Image-index search is disabled"
-        )
+        raise HTTPException(status_code=503, detail="Image-index search is disabled")
     if not _search_repo_available or _search_stream_producer is None:
-        raise HTTPException(
-            status_code=503, detail="Image-index search repository unavailable"
-        )
+        raise HTTPException(status_code=503, detail="Image-index search repository unavailable")
 
 
 router = APIRouter(
@@ -212,11 +204,7 @@ async def get_batch_results(
     if batch is None:
         # Row-missing and tenant-miss are indistinguishable, by design.
         raise HTTPException(status_code=404, detail="Batch not found")
-    items = (
-        await repo.get_items(batch.id, limit=limit, offset=offset)
-        if include_items
-        else []
-    )
+    items = await repo.get_items(batch.id, limit=limit, offset=offset) if include_items else []
     return _batch_to_response(batch, items)
 
 
@@ -258,11 +246,7 @@ async def get_results_by_external_id(
     batch = await repo.get_latest_by_external_id(external_id, user_id=user_id)
     if batch is None:
         raise HTTPException(status_code=404, detail="No runs for external_id")
-    items = (
-        await repo.get_items(batch.id, limit=limit, offset=offset)
-        if include_items
-        else []
-    )
+    items = await repo.get_items(batch.id, limit=limit, offset=offset) if include_items else []
     return _batch_to_response(batch, items)
 
 

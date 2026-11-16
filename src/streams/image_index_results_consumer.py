@@ -194,9 +194,7 @@ async def _maybe_autocheck_blacklist(lifecycle: dict) -> None:
 
         await auto_cross_reference_batch(user_id=user_id, batch_id=batch_id)
     except Exception as e:  # noqa: BLE001 — never block/unack the land
-        logger.error(
-            "auto-xref hook failed (user=%s batch=%s): %s", user_id, batch_id, e
-        )
+        logger.error("auto-xref hook failed (user=%s batch=%s): %s", user_id, batch_id, e)
 
 
 async def _process_compute_error(payload: dict, message_id: str) -> None:

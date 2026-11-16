@@ -82,9 +82,7 @@ async def cross_reference_entry(
     return ``[]``. **Never dispatches to any compute stream.**
     """
     if _evidence_repo is None or _image_index_repo is None:
-        logger.error(
-            "cross_reference_entry called before repos wired (entry=%s)", entry_id
-        )
+        logger.error("cross_reference_entry called before repos wired (entry=%s)", entry_id)
         return []
 
     settings = get_settings()

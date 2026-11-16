@@ -62,9 +62,7 @@ def main_patches(monkeypatch):
     # dedicated repo must reuse.
     qdrant_repo = MagicMock(name="live-qdrant-repo")
     qdrant_repo.initialize = AsyncMock()
-    monkeypatch.setattr(
-        main, "QdrantVectorRepository", MagicMock(return_value=qdrant_repo)
-    )
+    monkeypatch.setattr(main, "QdrantVectorRepository", MagicMock(return_value=qdrant_repo))
 
     # Dedicated image-index repo — initialize(client) awaited.
     image_index_repo = MagicMock(name="dedicated-image-index-repo")
@@ -120,9 +118,7 @@ def _reaper_job_ids(scheduler) -> list:
 # ── flag ON ──────────────────────────────────────────────────────────────────
 
 
-async def test_lifespan_enabled_inits_dedicated_repo_with_shared_client(
-    main_patches, monkeypatch
-):
+async def test_lifespan_enabled_inits_dedicated_repo_with_shared_client(main_patches, monkeypatch):
     monkeypatch.setattr(main.settings, "image_index_enabled", True)
 
     async with main.lifespan(MagicMock()):
@@ -155,9 +151,7 @@ async def test_lifespan_enabled_starts_results_before_submit(main_patches, monke
     assert order == ["results", "submit"]
 
 
-async def test_lifespan_enabled_registers_reaper_on_existing_scheduler(
-    main_patches, monkeypatch
-):
+async def test_lifespan_enabled_registers_reaper_on_existing_scheduler(main_patches, monkeypatch):
     monkeypatch.setattr(main.settings, "image_index_enabled", True)
 
     async with main.lifespan(MagicMock()):
@@ -168,18 +162,14 @@ async def test_lifespan_enabled_registers_reaper_on_existing_scheduler(
     scheduler = main_patches["scheduler"]
     assert "image_index_reaper" in _reaper_job_ids(scheduler)
     reaper_call = next(
-        c
-        for c in scheduler.add_job.call_args_list
-        if c.kwargs.get("id") == "image_index_reaper"
+        c for c in scheduler.add_job.call_args_list if c.kwargs.get("id") == "image_index_reaper"
     )
     assert reaper_call.args[0] is main.reap_stuck_image_index_batches
     # Exactly one scheduler was constructed for the whole app.
     main.AsyncIOScheduler.assert_called_once()
 
 
-async def test_lifespan_enabled_stops_results_consumer_on_shutdown(
-    main_patches, monkeypatch
-):
+async def test_lifespan_enabled_stops_results_consumer_on_shutdown(main_patches, monkeypatch):
     monkeypatch.setattr(main.settings, "image_index_enabled", True)
 
     async with main.lifespan(MagicMock()):

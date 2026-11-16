@@ -315,9 +315,7 @@ async def test_reaper_terminalizes_stale_image_index_and_resets_evidence(monkeyp
     fake_embed_repo = MagicMock()
     fake_embed_repo.get_stale_working = AsyncMock(return_value=[])
     fake_search_repo = MagicMock()
-    fake_search_repo.get_stale_working = AsyncMock(
-        return_value=[old_ii, recent_ii, evidence_row]
-    )
+    fake_search_repo.get_stale_working = AsyncMock(return_value=[old_ii, recent_ii, evidence_row])
 
     monkeypatch.setattr(safety_nets, "get_session", lambda: _FakeCM(_FakeSession()))
     monkeypatch.setattr(safety_nets, "EmbeddingRequestRepository", lambda s: fake_embed_repo)
@@ -390,9 +388,7 @@ async def test_get_by_search_id_scoped_is_tenant_and_type_scoped():
 
 def test_external_ids_cap_rejected_at_schema():
     with pytest.raises(Exception):
-        ImageIndexSearchCreate(
-            image_url="http://q", external_ids=[f"r{i}" for i in range(201)]
-        )
+        ImageIndexSearchCreate(image_url="http://q", external_ids=[f"r{i}" for i in range(201)])
 
 
 def test_external_ids_empty_rejected_at_schema():
