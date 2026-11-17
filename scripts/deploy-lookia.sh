@@ -24,8 +24,8 @@ case "$environment" in
     expected_host=srv1880388
     branch=main
     project=lookia-prod
-    microservices=/home/stanley/project/microservices
-    backup_parent=/home/stanley
+    microservices=/srv/lookia/microservices
+    backup_parent=/srv/lookia
     ready_target=lookia-ready-prod
     update_target=prod-update
     run_target=prod-run
