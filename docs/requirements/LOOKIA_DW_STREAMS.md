@@ -527,7 +527,96 @@ This is the **highest-cardinality stream** in the integration. The producer-side
 
 ---
 
+## 4.8 v1.1 — image blacklist delivery, live hits, hub search (2026-11-17)
+
+Agreed with lookia-dw in `Frontend#dw-online` #4932–#4940 (the plates-service pattern,
+`lookia-online-dw#placas-dw` #4888). Code: `src/services/blacklist_dw_delivery.py`,
+migration `d7e3a1c9b5f2`. **Each new event type is behind a flag that stays OFF until the
+DW posts that its SDK accepts it** (strict models DLQ unknown types/keys). Rows are
+RECORDED from the deploy on, so turning a flag on backfills everything held back.
+
+### Delivery of §4.3 / §4.4 / §4.5 is now TRACKED (no longer fire-and-forget)
+
+- Each entry / reference stores the `updated_at` the DW last received; NULL or different
+  = pending. Embeddings store `dw_published_at`.
+- Sent right after the commit; a failed XADD is recorded (`dw_publish_error`) and retried
+  by a sweep every `BLACKLIST_DW_SWEEP_INTERVAL_SECONDS` (60) until it succeeds.
+- **Daily reconcile** at `BLACKLIST_DW_RECONCILE_HOUR_UTC` (03:00Z): every entry and
+  reference (archived / inactive included) is re-sent as `.upserted`.
+- **Manual re-send:** `python -m scripts.resend_blacklist_to_dw --apply [--facts]`.
+- `updated_at` is always the row's real value; keep the newer one. Payloads unchanged.
+- The first sweep after the deploy re-sends the whole blacklist once (every row starts
+  NULL). `blacklist_image_embedding.created` can therefore repeat: upsert on `id`.
+- Entries/references now go out on every status change of the embed flow too
+  (PROCESSING → INDEXED, reference ERROR), which were partly missing before.
+
+### Hard-delete tombstones — flag `BLACKLIST_DW_TOMBSTONES_ENABLED` (default false)
+
+| Stream | event_type | Payload |
+|---|---|---|
+| `blacklist_image_entry:raw` | `blacklist_image_entry.deleted` | `{id, user_id, deleted_at}` |
+| `blacklist_image_reference:raw` | `blacklist_image_reference.deleted` | `{id, entry_id, user_id, deleted_at}` |
+
+- `DELETE /image-entries/{id}` writes one `entry` tombstone **and one `reference`
+  tombstone per reference** (the SQL cascade removes them). Embeddings are not
+  tombstoned: they follow their reference.
+- `DELETE /image-entries/{id}/references/{rid}` writes one `reference` tombstone.
+- Written in the same transaction as the delete; retried and re-sendable like the rest.
+- `id` = the deleted entry / reference id. `deleted_at`: ISO-8601 UTC, no `Z`
+  (same format as every other timestamp on these streams).
+
+### NEW stream `blacklist_image_match:raw` — flag `BLACKLIST_MATCH_DW_ENABLED` (default false)
+
+`event_type: blacklist_image_match.detected`, MAXLEN ~10k. One event per live hit, from
+all three paths: `trigger` = `inline` (new evidence), `reverse_search` (new reference vs
+history), `image_index_xref` (batch-indexed images). Same fields as report-generation's
+`image.blacklist_match`, except the entry name is hashed:
+
+```json
+{
+  "id": "uuid — deterministic uuid5(reference_id | matched_qdrant_point_id | match_target)",
+  "user_id": "string (blacklist owner)",
+  "blacklist_entry_id": "uuid", "blacklist_entry_name_hash": "hex16 (as name_hash §4.3)",
+  "blacklist_entry_category": "string|null", "blacklist_entry_version": 1,
+  "blacklist_reference_id": "uuid", "blacklist_reference_url": "https://...",
+  "blacklist_model_version": "clip-vit-b-32",
+  "evidence_id": "string", "evidence_camera_id": "string|null", "evidence_device_id": "string|null",
+  "evidence_app_id": 1, "evidence_infraction_code": "string|null", "evidence_category": "string|null",
+  "matched_image_url": "https://...", "matched_image_index": 0,
+  "matched_qdrant_point_id": "string", "matched_point_id": "string|null",
+  "zip_url": "string|null", "zip_entry": "string|null",
+  "similarity_score": 0.91, "threshold_used": 0.85,
+  "trigger": "inline|reverse_search|image_index_xref",
+  "match_target": "evidence|image_index", "external_id": "string|null", "batch_id": "string|null",
+  "matched_at": "2026-11-17T00:00:00Z"
+}
+```
+
+- The same hit found twice (inline + reverse search, a backfill) has the same `id` and is
+  sent once. Upsert on `id`.
+- `match_target` / `external_id` / `batch_id` are ALWAYS present here (`evidence` + nulls
+  on the evidence path), unlike the report-generation event.
+
+### §4.1 search events — `hub_id` + scope, flag `DW_SEARCH_HUB_ID_ENABLED` (default false)
+
+- `POST /api/v1/search` takes an optional `hub_id`. Every search is now tenant-scoped
+  (before 2026-11-17 a non-admin search matched every tenant's evidence): own evidence,
+  a guest → the inviter's, a hub → every member's (membership from identity-service;
+  a non-admin caller must be a member). Admin/root/dev unscoped unless `hub_id`.
+- With the flag on, `image_search.created/.completed/.failed` carry one more key:
+  `"hub_id": "uuid|null"`. `user_id` stays the person who searched (a guest is the guest).
+- `search_metadata` never carries the internal keys `scope_user_ids` / `hub_id`.
+- `GET /api/v1/search/{id}`, `/matches`: only the searcher (or admin). `GET
+  /api/v1/search/user/{user_id}`: only your own (403). The hub history is the DW's
+  `GET /cameras/v1/images/searches`.
+
+---
+
 ## 5. Delivery semantics
+
+> **Since v1.1 (§4.8) the three blacklist streams (§4.3–§4.5) and
+> `blacklist_image_match:raw` are TRACKED (retry + daily reconcile + manual re-send).**
+> The text below still applies to §4.1, §4.2, §4.6 and §4.7.
 
 **Fire-and-forget.** Each publish is wrapped in a try/except that logs at ERROR level but does not raise:
 

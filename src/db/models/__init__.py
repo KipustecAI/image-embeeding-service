@@ -1,8 +1,10 @@
 """Database models."""
 
 from .blacklist_image import (
+    BlacklistImageDeletion,
     BlacklistImageEmbedding,
     BlacklistImageEntry,
+    BlacklistImageMatch,
     BlacklistImageReference,
 )
 from .constants import (
@@ -22,8 +24,10 @@ from .search_request import SearchRequest
 
 __all__ = [
     "BlacklistEntryStatus",
+    "BlacklistImageDeletion",
     "BlacklistImageEmbedding",
     "BlacklistImageEntry",
+    "BlacklistImageMatch",
     "BlacklistImageReference",
     "BlacklistReferenceStatus",
     "EmbeddingRequest",

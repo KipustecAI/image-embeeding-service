@@ -101,6 +101,11 @@ def _publish(stream: str, event_type: str, payload: dict, maxlen: int) -> None:
         )
 
 
+# Keys of ``search_metadata`` that are internal (search scope) and are stripped
+# from the DW payload. Must match ``src/application/helpers/search_scope.py``.
+_SEARCH_METADATA_INTERNAL_KEYS = frozenset({"scope_user_ids", "hub_id"})
+
+
 # ── Stream 4.1: image_search_request:raw ───────────────────────────────────
 
 
@@ -111,16 +116,25 @@ def publish_image_search_request(event_type: str, row) -> None:
     ``row`` is a ``SearchRequest`` ORM instance, snapshotted by the
     caller so attribute access doesn't touch the session.
     """
+    search_metadata = row.search_metadata
+    if isinstance(search_metadata, dict):
+        # Internal routing keys never leave the service: the resolved hub member
+        # list (can be long) and the hub id (sent as its own key below, once the DW
+        # accepts it).
+        search_metadata = {
+            k: v for k, v in search_metadata.items() if k not in _SEARCH_METADATA_INTERNAL_KEYS
+        }
     payload: dict[str, Any] = {
         "id": _uuid_str(row.id),
         "search_id": row.search_id,
+        # The person who searched (X-User-Id; a guest is the guest).
         "user_id": row.user_id,
         "image_url": row.image_url,
         "status": row.status,
         "similarity_status": row.similarity_status,
         "threshold": row.threshold,
         "max_results": row.max_results,
-        "search_metadata": row.search_metadata,
+        "search_metadata": search_metadata,
         "total_matches": row.total_matches,
         "results_key": row.results_key,
         "qdrant_query_point_id": row.qdrant_query_point_id,
@@ -133,6 +147,11 @@ def publish_image_search_request(event_type: str, row) -> None:
         "created_at": _iso(row.created_at),
         "updated_at": _iso(row.updated_at),
     }
+    # ``hub_id`` (uuid or null) — the DW models are strict, so the key is sent only
+    # once the DW has posted that its SDK accepts it (Frontend#dw-online #4936 (b)).
+    if settings.dw_search_hub_id_enabled:
+        metadata = row.search_metadata if isinstance(row.search_metadata, dict) else {}
+        payload["hub_id"] = metadata.get("hub_id")
     _publish(
         stream=settings.dw_stream_image_search_request,
         event_type=event_type,
@@ -204,17 +223,31 @@ def _match_point_id(m) -> str | None:
     return str(point_id) if point_id else None
 
 
-# ── Stream 4.3: blacklist_image_entry:raw ──────────────────────────────────
+# ── Streams 4.3 – 4.5 + 4.8: the image blacklist (TRACKED delivery) ─────────
+#
+# These are NOT fire-and-forget any more. The builders below only shape the
+# payloads; ``src/services/blacklist_dw_delivery.py`` sends them, records what the
+# DW received on the row, retries every 60 s until the XADD succeeds, re-sends the
+# whole blacklist daily, and sends hard-delete tombstones. Contract: Frontend#dw-online
+# #4932–#4940 + docs/requirements/LOOKIA_DW_STREAMS.md §4.3–§4.5, §4.8.
+
+BLACKLIST_IMAGE_ENTRY_UPSERTED = "blacklist_image_entry.upserted"
+BLACKLIST_IMAGE_ENTRY_DELETED = "blacklist_image_entry.deleted"
+BLACKLIST_IMAGE_REFERENCE_UPSERTED = "blacklist_image_reference.upserted"
+BLACKLIST_IMAGE_REFERENCE_DELETED = "blacklist_image_reference.deleted"
+BLACKLIST_IMAGE_EMBEDDING_CREATED = "blacklist_image_embedding.created"
+BLACKLIST_IMAGE_MATCH_DETECTED = "blacklist_image_match.detected"
 
 
-def publish_blacklist_image_entry(row) -> None:
-    """Fires on INSERT / UPDATE / soft-archive.
+def build_blacklist_image_entry_payload(row) -> dict[str, Any]:
+    """``blacklist_image_entry.upserted`` — every INSERT / UPDATE, the daily
+    reconcile and a manual re-send. ``updated_at`` is the row's real value (the DW
+    keeps the newer one, so a re-send never undoes an edit).
 
-    PII: ``row.name`` is hashed before serialization. The raw ``name``
-    is **never** placed in the payload — see the regression test in
-    ``tests/test_dw_publisher.py``.
+    PII: ``row.name`` is hashed. The raw ``name`` is **never** in the payload — see
+    the regression test in ``tests/test_dw_publisher.py``.
     """
-    payload: dict[str, Any] = {
+    return {
         "id": _uuid_str(row.id),
         "name_hash": name_hash(row.name) if row.name else "",
         "category": row.category,
@@ -228,20 +261,11 @@ def publish_blacklist_image_entry(row) -> None:
         "created_at": _iso(row.created_at),
         "updated_at": _iso(row.updated_at),
     }
-    _publish(
-        stream=settings.dw_stream_blacklist_image_entry,
-        event_type="blacklist_image_entry.upserted",
-        payload=payload,
-        maxlen=settings.dw_maxlen_blacklist_image_entry,
-    )
 
 
-# ── Stream 4.4: blacklist_image_reference:raw ──────────────────────────────
-
-
-def publish_blacklist_image_reference(row) -> None:
-    """Fires on INSERT and on UPDATE that changes status / error / retry."""
-    payload: dict[str, Any] = {
+def build_blacklist_image_reference_payload(row) -> dict[str, Any]:
+    """``blacklist_image_reference.upserted`` — INSERT and every status change."""
+    return {
         "id": _uuid_str(row.id),
         "entry_id": _uuid_str(row.entry_id),
         "image_url": row.image_url,
@@ -253,22 +277,13 @@ def publish_blacklist_image_reference(row) -> None:
         "created_at": _iso(row.created_at),
         "updated_at": _iso(row.updated_at),
     }
-    _publish(
-        stream=settings.dw_stream_blacklist_image_reference,
-        event_type="blacklist_image_reference.upserted",
-        payload=payload,
-        maxlen=settings.dw_maxlen_blacklist_image_reference,
-    )
 
 
-# ── Stream 4.5: blacklist_image_embedding:raw ──────────────────────────────
-
-
-def publish_blacklist_image_embedding(row) -> None:
-    """Fires on INSERT only — embeddings are immutable; model upgrades
-    create new rows. See contract §4.5.
+def build_blacklist_image_embedding_payload(row) -> dict[str, Any]:
+    """``blacklist_image_embedding.created`` — INSERT only (embeddings are
+    immutable). May be sent more than once (retry); the DW upserts on ``id``.
     """
-    payload: dict[str, Any] = {
+    return {
         "id": _uuid_str(row.id),
         "entry_id": _uuid_str(row.entry_id),
         "reference_id": _uuid_str(row.reference_id),
@@ -277,12 +292,56 @@ def publish_blacklist_image_embedding(row) -> None:
         "json_data": row.json_data,
         "created_at": _iso(row.created_at),
     }
-    _publish(
-        stream=settings.dw_stream_blacklist_image_embedding,
-        event_type="blacklist_image_embedding.created",
-        payload=payload,
-        maxlen=settings.dw_maxlen_blacklist_image_embedding,
+
+
+def build_blacklist_image_deleted_payload(tomb) -> tuple[str, str, dict[str, Any]]:
+    """Tombstone of a hard delete → ``(stream, event_type, payload)``.
+
+    * entry:     ``blacklist_image_entry.deleted``     ``{id, user_id, deleted_at}``
+    * reference: ``blacklist_image_reference.deleted`` ``{id, entry_id, user_id, deleted_at}``
+
+    An entry delete writes one tombstone for the entry AND one per reference (the
+    SQL cascade removes them); embeddings follow their reference on the DW side.
+    """
+    if tomb.kind == "entry":
+        return (
+            settings.dw_stream_blacklist_image_entry,
+            BLACKLIST_IMAGE_ENTRY_DELETED,
+            {
+                "id": _uuid_str(tomb.target_id),
+                "user_id": tomb.user_id,
+                "deleted_at": _iso(tomb.deleted_at),
+            },
+        )
+    return (
+        settings.dw_stream_blacklist_image_reference,
+        BLACKLIST_IMAGE_REFERENCE_DELETED,
+        {
+            "id": _uuid_str(tomb.target_id),
+            "entry_id": _uuid_str(tomb.entry_id),
+            "user_id": tomb.user_id,
+            "deleted_at": _iso(tomb.deleted_at),
+        },
     )
+
+
+def build_blacklist_image_match_payload(event: dict[str, Any], *, match_id: str) -> dict[str, Any]:
+    """``blacklist_image_match.detected`` (§4.8) from the report-generation
+    ``image.blacklist_match`` event: the same fields, with the entry NAME replaced
+    by ``blacklist_entry_name_hash`` (PII, as on §4.3), plus ``id``.
+
+    The image-index keys (``match_target``, ``external_id``, ``batch_id``) are
+    ALWAYS present here (``match_target="evidence"`` + nulls on the evidence path),
+    so the DW model has one fixed shape.
+    """
+    payload = {k: v for k, v in event.items() if k != "blacklist_entry_name"}
+    name = event.get("blacklist_entry_name")
+    payload["blacklist_entry_name_hash"] = name_hash(name) if name else ""
+    payload["id"] = match_id
+    payload.setdefault("match_target", "evidence")
+    payload.setdefault("external_id", None)
+    payload.setdefault("batch_id", None)
+    return payload
 
 
 # ── Stream 4.6: image_embedding_request:raw (Tier 3) ───────────────────────

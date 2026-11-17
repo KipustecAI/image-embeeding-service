@@ -64,6 +64,11 @@ class BlacklistImageEntry(Base):
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    # DW delivery (src/services/blacklist_dw_delivery.py): the ``updated_at`` the DW
+    # last received. NULL or != updated_at → pending. Never edited by hand.
+    dw_published_updated_at = Column(DateTime, nullable=True)
+    dw_publish_error = Column(Text, nullable=True)
+
     references = relationship(
         "BlacklistImageReference",
         back_populates="entry",
@@ -110,6 +115,10 @@ class BlacklistImageReference(Base):
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # DW delivery — same meaning as on BlacklistImageEntry.
+    dw_published_updated_at = Column(DateTime, nullable=True)
+    dw_publish_error = Column(Text, nullable=True)
 
     entry = relationship("BlacklistImageEntry", back_populates="references")
     embeddings = relationship(
@@ -160,6 +169,10 @@ class BlacklistImageEmbedding(Base):
 
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
+    # DW delivery — insert-only rows: NULL = not yet on the DW.
+    dw_published_at = Column(DateTime, nullable=True)
+    dw_publish_error = Column(Text, nullable=True)
+
     entry = relationship("BlacklistImageEntry", back_populates="embeddings")
     reference = relationship("BlacklistImageReference", back_populates="embeddings")
 
@@ -168,3 +181,46 @@ class BlacklistImageEmbedding(Base):
             f"<BlacklistImageEmbedding {self.id} entry_id={self.entry_id} "
             f"point={self.qdrant_point_id}>"
         )
+
+
+class BlacklistImageDeletion(Base):
+    """Tombstone of a hard-deleted entry or reference, kept so the DW
+    ``.deleted`` event is retried until it lands (and can be re-sent).
+    Written in the SAME transaction as the delete.
+    """
+
+    __tablename__ = "blacklist_image_deletions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    kind = Column(String(16), nullable=False)  # "entry" | "reference"
+    target_id = Column(UUID(as_uuid=True), nullable=False)
+    entry_id = Column(UUID(as_uuid=True), nullable=True)
+    user_id = Column(String(255), nullable=True)
+    deleted_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    dw_published_at = Column(DateTime, nullable=True, index=True)
+    dw_publish_error = Column(Text, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("kind", "target_id", name="uq_blacklist_image_deletion_target"),
+    )
+
+
+class BlacklistImageMatch(Base):
+    """One live blacklist hit, recorded for the DW (``blacklist_image_match:raw``).
+
+    ``id`` is deterministic (see ``blacklist_dw_delivery.match_id``), so the same hit
+    found by two paths is stored once. ``payload`` is the DW event payload, built
+    once at detection time.
+    """
+
+    __tablename__ = "blacklist_image_matches"
+
+    id = Column(UUID(as_uuid=True), primary_key=True)
+    user_id = Column(String(255), nullable=True)
+    entry_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    reference_id = Column(UUID(as_uuid=True), nullable=False)
+    evidence_id = Column(String(255), nullable=True)
+    matched_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    payload = Column(JSONB, nullable=False)
+    dw_published_at = Column(DateTime, nullable=True, index=True)
+    dw_publish_error = Column(Text, nullable=True)

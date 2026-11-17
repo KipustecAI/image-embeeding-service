@@ -12,6 +12,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
+from uuid import UUID
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -19,6 +20,7 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import Depends, FastAPI, HTTPException, Query
 from pydantic import BaseModel
@@ -28,8 +30,14 @@ from src.api.dependencies import UserContext, get_user_context
 from src.api.v1.routers import blacklist_image as blacklist_image_router
 from src.api.v1.routers import frames as frames_router
 from src.api.v1.routers import image_index as image_index_router
-from src.application.helpers.source_type_filter import build_evidence_only_filter
-from src.application.helpers.weapon_filters import build_weapon_filter_conditions
+from src.application.helpers.search_scope import (
+    HUB_KEY,
+    MATCH_NOTHING,
+    SCOPE_KEY,
+    build_search_filter,
+    is_admin_role,
+    strip_reserved,
+)
 from src.db.repositories import EmbeddingRequestRepository, SearchRequestRepository
 from src.infrastructure.config import get_settings
 from src.infrastructure.database import engine, get_session
@@ -38,6 +46,9 @@ from src.infrastructure.vector_db.image_index_vector_repository import (
     ImageIndexVectorRepository,
 )
 from src.infrastructure.vector_db.qdrant_repository import QdrantVectorRepository
+from src.services.blacklist_dw_delivery import reconcile_job as blacklist_dw_reconcile_job
+from src.services.blacklist_dw_delivery import set_blacklist_dw_producer
+from src.services.blacklist_dw_delivery import sweep_job as blacklist_dw_sweep_job
 from src.services.blacklist_embed_service import set_blacklist_vector_repo
 from src.services.blacklist_image_index_xref import (
     set_xref_evidence_repo,
@@ -51,6 +62,12 @@ from src.services.blacklist_reverse_search import (
 from src.services.dw_publisher_service import (
     publish_image_search_request,
     set_dw_publisher_producer,
+)
+from src.services.identity_client import (
+    HubNotFound,
+    IdentityUnavailable,
+    close_identity_client,
+    get_hub_user_ids,
 )
 from src.services.safety_nets import (
     cleanup_old_requests,
@@ -175,6 +192,9 @@ async def lifespan(app: FastAPI):
     # …and routes the 7 lookia-dw streams — see
     # docs/requirements/LOOKIA_DW_STREAMS.md.
     set_dw_publisher_producer(stream_producer)
+    # …and the image blacklist's tracked delivery (retry / reconcile / tombstones /
+    # hits) — see src/services/blacklist_dw_delivery.py.
+    set_blacklist_dw_producer(stream_producer)
     # The blacklist CRUD router (Phase 06) needs Qdrant for cleanup on
     # delete + the StreamProducer to publish embed requests on reference
     # add. Wire after both singletons exist.
@@ -203,6 +223,23 @@ async def lifespan(app: FastAPI):
         IntervalTrigger(hours=24),
         id="cleanup_old",
         misfire_grace_time=600,
+    )
+    # Image blacklist → DW: retry sweep + daily full re-send (Frontend#dw-online #4936).
+    scheduler.add_job(
+        blacklist_dw_sweep_job,
+        IntervalTrigger(seconds=max(5, settings.blacklist_dw_sweep_interval_seconds)),
+        id="blacklist_dw_sweep",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=60,
+    )
+    scheduler.add_job(
+        blacklist_dw_reconcile_job,
+        CronTrigger(hour=settings.blacklist_dw_reconcile_hour_utc, minute=0, timezone="UTC"),
+        id="blacklist_dw_reconcile",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
     )
     scheduler.start()
     # Blacklist reverse-search jobs are added on demand from
@@ -322,6 +359,7 @@ async def lifespan(app: FastAPI):
 
     # Frame endpoint's shared httpx client (created lazily on the first request).
     await frames_router.close_frame_service()
+    await close_identity_client()
 
     await engine.dispose()
     logger.info("Shutdown complete")
@@ -457,6 +495,9 @@ class SearchCreateRequest(BaseModel):
     # Category filter — see docs/image-blacklist/01_CATEGORY.md
     # Scalar → Qdrant MatchValue; list → MatchAny (any of the requested categories match).
     category: str | list[str] | None = None
+    # Hub-scoped search (Frontend#dw-online #4936 (b)): match the evidence of every
+    # member of this hub. The caller must be a member (a guest: the inviter).
+    hub_id: UUID | None = None
 
 
 @app.post("/api/v1/search", status_code=202)
@@ -466,12 +507,11 @@ async def create_search(
 ):
     """Submit a search — publishes to GPU compute stream, returns search_id."""
     search_id = str(__import__("uuid").uuid4())
+    # The person who searched (a guest is the guest) — goes on the row + DW events.
     user_id = ctx.user_id
-    metadata = body.metadata or {}
-
-    # Multi-tenant: non-admin users can only search their own evidence
-    if ctx.role not in ("admin", "root", "dev"):
-        metadata["user_id"] = user_id
+    # Client metadata may never carry the scope keys (see search_scope.py).
+    metadata = strip_reserved(body.metadata)
+    metadata.update(await _resolve_search_scope(ctx, body.hub_id))
 
     # Weapons filter — stashed in metadata so it survives the GPU round-trip.
     # See docs/weapons/04_SEARCH_API.md.
@@ -529,6 +569,47 @@ async def create_search(
         "status": "pending",
         "message": f"Search submitted, check status at /api/v1/search/{search_id}",
     }
+
+
+async def _resolve_search_scope(ctx: UserContext, hub_id: UUID | None) -> dict:
+    """The tenant scope of a new search, stored in its metadata (search_scope.py).
+
+    * no hub, admin/root/dev → unscoped (``{}``)
+    * no hub, anyone else    → the caller's own evidence (a guest → the inviter)
+    * hub                    → every member's evidence; a non-admin caller must be a
+                               member. identity 404 → 404, identity down → 503 (never
+                               degraded to unscoped or to empty).
+    """
+    is_admin = is_admin_role(ctx.role)
+    owner_id = ctx.owner_id
+    if hub_id is None:
+        if is_admin:
+            return {}
+        if not owner_id:
+            raise HTTPException(status_code=401, detail="Missing X-User-Id")
+        return {SCOPE_KEY: [owner_id]}
+
+    if not settings.hub_scope_enabled:
+        raise HTTPException(
+            status_code=503, detail="Hub scoping is disabled (HUB_SCOPE_ENABLED=false)"
+        )
+    try:
+        members = await get_hub_user_ids(str(hub_id))
+    except HubNotFound:
+        raise HTTPException(status_code=404, detail="Hub not found") from None
+    except IdentityUnavailable as e:
+        logger.error("Hub scope resolution failed for hub %s: %s", hub_id, e)
+        raise HTTPException(
+            status_code=503, detail="Identity service unavailable — cannot resolve hub membership"
+        ) from None
+    if not is_admin and owner_id not in members:
+        raise HTTPException(status_code=403, detail="Not a member of this hub")
+    return {SCOPE_KEY: members, HUB_KEY: str(hub_id)}
+
+
+def _can_read_search(ctx: UserContext, request) -> bool:
+    """A search row is readable by the person who ran it, or by admin/root/dev."""
+    return is_admin_role(ctx.role) or (bool(ctx.user_id) and request.user_id == ctx.user_id)
 
 
 @app.get("/api/v1/search/categories")
@@ -605,7 +686,8 @@ async def get_search(
         repo = SearchRequestRepository(session)
         request = await repo.get_by_search_id(search_id)
 
-        if not request:
+        # Someone else's search is "not found" (no probing by id).
+        if not request or not _can_read_search(ctx, request):
             raise HTTPException(status_code=404, detail="Search not found")
 
         return {
@@ -637,7 +719,7 @@ async def get_search_matches(
         repo = SearchRequestRepository(session)
         request = await repo.get_by_search_id(search_id)
 
-        if not request:
+        if not request or not _can_read_search(ctx, request):
             raise HTTPException(status_code=404, detail="Search not found")
 
         matches = await repo.get_matches(request.id, limit=limit, offset=offset)
@@ -659,7 +741,13 @@ async def list_user_searches(
     offset: int = Query(0, ge=0),
     ctx: UserContext = Depends(get_user_context),
 ):
-    """List all searches by a user, paginated, most recent first."""
+    """List all searches by a user, paginated, most recent first.
+
+    A non-admin may only list their own searches (the hub-wide history is the DW's
+    ``/cameras/v1/images/searches``).
+    """
+    if not is_admin_role(ctx.role) and user_id != ctx.user_id:
+        raise HTTPException(status_code=403, detail="Can only list your own searches")
     async with get_session() as session:
         repo = SearchRequestRepository(session)
         searches = await repo.get_by_user_id(user_id, limit=limit, offset=offset)
@@ -693,7 +781,12 @@ async def trigger_recalculation(
     hours_old: int = Query(2, ge=0, le=168),
     ctx: UserContext = Depends(get_user_context),
 ):
-    """Manually trigger recalculation of completed searches using stored query vectors."""
+    """Manually trigger recalculation of completed searches using stored query vectors.
+
+    Ops only (admin / root / dev): it re-runs every tenant's searches.
+    """
+    if not is_admin_role(ctx.role):
+        raise HTTPException(status_code=403, detail="Admin only")
     import numpy as np
     from sqlalchemy import delete as sa_delete
 
@@ -720,25 +813,17 @@ async def trigger_recalculation(
                 skipped += 1
                 continue
 
-            filter_conditions: dict = {}
-            if s.search_metadata:
-                filter_conditions = {
-                    k: v
-                    for k, v in s.search_metadata.items()
-                    if k in ("camera_id", "object_type", "category")
-                }
-                filter_conditions.update(build_weapon_filter_conditions(s.search_metadata))
-
-            # User-facing search — never return blacklist points.
-            # See docs/image-blacklist/03_QDRANT.md.
-            filter_conditions = build_evidence_only_filter(filter_conditions)
-
-            matches = await vector_repo.search_similar(
-                query_vector=np.array(query_vector_list, dtype=np.float32),
-                limit=s.max_results,
-                threshold=s.threshold,
-                filter_conditions=filter_conditions,
-            )
+            # Evidence-only + the search's tenant scope (search_scope.py).
+            filter_conditions = build_search_filter(s.search_metadata)
+            if filter_conditions is MATCH_NOTHING:
+                matches = []
+            else:
+                matches = await vector_repo.search_similar(
+                    query_vector=np.array(query_vector_list, dtype=np.float32),
+                    limit=s.max_results,
+                    threshold=s.threshold,
+                    filter_conditions=filter_conditions,
+                )
 
             # Delete old matches
             await session.execute(
