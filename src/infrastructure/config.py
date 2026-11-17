@@ -168,6 +168,48 @@ class Settings(BaseSettings):
     )
     dw_maxlen_image_embedding: int = Field(50_000, validation_alias="DW_MAXLEN_IMAGE_EMBEDDING")
 
+    # ── Image blacklist → DW: TRACKED delivery (src/services/blacklist_dw_delivery.py)
+    # Contract: Frontend#dw-online #4932–#4940. Every send is recorded on the row and
+    # retried every sweep until the XADD succeeds; the whole blacklist is re-sent once
+    # a day. ``.upserted`` / ``.created`` keep flowing as before (ON by default).
+    blacklist_dw_publish_enabled: bool = Field(
+        True, validation_alias="BLACKLIST_DW_PUBLISH_ENABLED"
+    )
+    # Hard-delete tombstones (``.deleted``). The DW's strict models send an unknown
+    # event_type to the DLQ, so this stays OFF until the DW posts its SDK accepts them.
+    # Tombstones are RECORDED either way and go out when this flips on.
+    blacklist_dw_tombstones_enabled: bool = Field(
+        False, validation_alias="BLACKLIST_DW_TOMBSTONES_ENABLED"
+    )
+    # Live blacklist hits → blacklist_image_match:raw. Same gate reason; hits are
+    # RECORDED either way and go out (backfilled) when this flips on.
+    blacklist_match_dw_enabled: bool = Field(False, validation_alias="BLACKLIST_MATCH_DW_ENABLED")
+    blacklist_dw_sweep_interval_seconds: int = Field(
+        60, validation_alias="BLACKLIST_DW_SWEEP_INTERVAL_SECONDS"
+    )
+    blacklist_dw_reconcile_hour_utc: int = Field(
+        3, validation_alias="BLACKLIST_DW_RECONCILE_HOUR_UTC"
+    )
+    dw_stream_blacklist_image_match: str = Field(
+        "blacklist_image_match:raw", validation_alias="DW_STREAM_BLACKLIST_IMAGE_MATCH"
+    )
+    dw_maxlen_blacklist_image_match: int = Field(
+        10_000, validation_alias="DW_MAXLEN_BLACKLIST_IMAGE_MATCH"
+    )
+    # ``hub_id`` key on image_search.* events. OFF until the DW posts it is live
+    # (its strict models would DLQ the extra key).
+    dw_search_hub_id_enabled: bool = Field(False, validation_alias="DW_SEARCH_HUB_ID_ENABLED")
+
+    # ── Hub-scoped search (POST /api/v1/search {hub_id}) ─────────────────────
+    # Membership comes from identity-service GET /internal/hubs/{hub_id}/user-ids
+    # (in-cluster, NO auth header) — the same seam as plates-service.
+    hub_scope_enabled: bool = Field(True, validation_alias="HUB_SCOPE_ENABLED")
+    identity_service_url: str = Field(
+        "http://identity-service:8001", validation_alias="IDENTITY_SERVICE_URL"
+    )
+    identity_timeout_seconds: float = Field(5.0, validation_alias="IDENTITY_TIMEOUT_SECONDS")
+    hub_members_cache_ttl: int = Field(60, validation_alias="HUB_MEMBERS_CACHE_TTL")
+
     # ── On-demand image-index (ADDITIVE, ISOLATED, gated-OFF) ────────────────
     # Full spec: docs/image-index/00_DESIGN.md §2. Feature stays dark until this
     # flag flips True after the Phase 5 live smoke. All Redis on redis_streams_db (DB 3).

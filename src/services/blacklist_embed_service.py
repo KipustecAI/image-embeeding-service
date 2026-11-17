@@ -30,11 +30,7 @@ from uuid import UUID, uuid4
 from ..db.models.constants import BlacklistEntryStatus, BlacklistReferenceStatus
 from ..db.repositories.blacklist_image_repo import BlacklistImageRepository
 from ..infrastructure.database import get_session
-from .dw_publisher_service import (
-    publish_blacklist_image_embedding,
-    publish_blacklist_image_entry,
-    publish_blacklist_image_reference,
-)
+from .blacklist_dw_delivery import flush_now as flush_blacklist_to_dw
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +119,7 @@ async def store_blacklist_embedding(
 
     async with get_session() as session:
         repo = BlacklistImageRepository(session)
-        embedding_row = await repo.create_embedding(
+        await repo.create_embedding(
             entry_id=entry_id,
             reference_id=reference_id,
             qdrant_point_id=point_id,
@@ -134,16 +130,6 @@ async def store_blacklist_embedding(
         # Subsequent references just keep it at INDEXED (no-op).
         await repo.update_entry_status(entry_id, status=BlacklistEntryStatus.INDEXED)
 
-        # Reload updated rows so the DW publishers see post-update state.
-        reference_after = await repo.get_reference(reference_id)
-        entry_after = await repo.get_entry(entry_id)
-        await session.flush()
-        session.expunge(embedding_row)
-        if reference_after is not None:
-            session.expunge(reference_after)
-        if entry_after is not None:
-            session.expunge(entry_after)
-
     logger.info(
         "Stored blacklist embedding: entry=%s ref=%s point=%s",
         entry_id,
@@ -151,15 +137,9 @@ async def store_blacklist_embedding(
         point_id,
     )
 
-    # ── lookia-dw publishers (fire-and-forget) ──
-    # Embedding INSERT — immutable, single emission (contract §4.5).
-    publish_blacklist_image_embedding(embedding_row)
-    # Reference status UPDATE → PROCESSED (contract §4.4).
-    if reference_after is not None:
-        publish_blacklist_image_reference(reference_after)
-    # Entry status UPDATE → INDEXED (contract §4.3).
-    if entry_after is not None:
-        publish_blacklist_image_entry(entry_after)
+    # Tracked delivery to lookia-dw: the new embedding (§4.5), the reference now
+    # PROCESSED (§4.4) and the entry now INDEXED (§4.3) are pending until sent.
+    await flush_blacklist_to_dw()
 
     # Reverse search runs after the DB commit so a job restart will see
     # consistent state if it queries the embedding row.

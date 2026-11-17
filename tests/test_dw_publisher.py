@@ -175,7 +175,7 @@ def test_empty_matches_does_not_publish(fake_producer):
 # ── blacklist_image_entry:raw — PII guard ─────────────────────────────────
 
 
-def test_blacklist_image_entry_never_includes_raw_name(fake_producer):
+def test_blacklist_image_entry_never_includes_raw_name():
     """⚠️ PII REGRESSION GUARD ⚠️
 
     The contract REQUIRES that `name` never appears on the wire — only
@@ -196,10 +196,7 @@ def test_blacklist_image_entry_never_includes_raw_name(fake_producer):
         updated_at=datetime(2026, 5, 16),
     )
 
-    dw.publish_blacklist_image_entry(row)
-
-    fake_producer.publish.assert_called_once()
-    payload = fake_producer.publish.call_args.kwargs["payload"]
+    payload = dw.build_blacklist_image_entry_payload(row)
 
     # Hash is present, length-locked.
     assert "name_hash" in payload
@@ -215,7 +212,7 @@ def test_blacklist_image_entry_never_includes_raw_name(fake_producer):
     assert "Suspect" not in serialized
 
 
-def test_blacklist_image_entry_shape(fake_producer):
+def test_blacklist_image_entry_shape():
     row = _ns(
         id=uuid4(),
         name="test",
@@ -230,12 +227,9 @@ def test_blacklist_image_entry_shape(fake_producer):
         created_at=datetime(2026, 5, 16),
         updated_at=datetime(2026, 5, 16),
     )
-    dw.publish_blacklist_image_entry(row)
-    kwargs = fake_producer.publish.call_args.kwargs
-    assert kwargs["stream"] == settings.dw_stream_blacklist_image_entry
-    assert kwargs["event_type"] == "blacklist_image_entry.upserted"
-    assert kwargs["maxlen"] == settings.dw_maxlen_blacklist_image_entry
-    p = kwargs["payload"]
+    assert dw.BLACKLIST_IMAGE_ENTRY_UPSERTED == "blacklist_image_entry.upserted"
+    p = dw.build_blacklist_image_entry_payload(row)
+    assert p["updated_at"] == "2026-05-16T00:00:00"
     assert p["blacklist_version"] == 2
     assert p["active"] is True
     assert p["json_data"] == {"k": "v"}
@@ -244,7 +238,7 @@ def test_blacklist_image_entry_shape(fake_producer):
 # ── blacklist_image_reference:raw ─────────────────────────────────────────
 
 
-def test_blacklist_image_reference_shape(fake_producer):
+def test_blacklist_image_reference_shape():
     ref = _ns(
         id=uuid4(),
         entry_id=uuid4(),
@@ -257,11 +251,8 @@ def test_blacklist_image_reference_shape(fake_producer):
         created_at=datetime(2026, 5, 16),
         updated_at=datetime(2026, 5, 16),
     )
-    dw.publish_blacklist_image_reference(ref)
-    kwargs = fake_producer.publish.call_args.kwargs
-    assert kwargs["stream"] == settings.dw_stream_blacklist_image_reference
-    assert kwargs["event_type"] == "blacklist_image_reference.upserted"
-    p = kwargs["payload"]
+    assert dw.BLACKLIST_IMAGE_REFERENCE_UPSERTED == "blacklist_image_reference.upserted"
+    p = dw.build_blacklist_image_reference_payload(ref)
     assert p["status"] == 3
     assert p["image_type"] == "reference"
 
@@ -269,7 +260,7 @@ def test_blacklist_image_reference_shape(fake_producer):
 # ── blacklist_image_embedding:raw ─────────────────────────────────────────
 
 
-def test_blacklist_image_embedding_shape(fake_producer):
+def test_blacklist_image_embedding_shape():
     emb = _ns(
         id=uuid4(),
         entry_id=uuid4(),
@@ -279,11 +270,8 @@ def test_blacklist_image_embedding_shape(fake_producer):
         json_data={},
         created_at=datetime(2026, 5, 16),
     )
-    dw.publish_blacklist_image_embedding(emb)
-    kwargs = fake_producer.publish.call_args.kwargs
-    assert kwargs["stream"] == settings.dw_stream_blacklist_image_embedding
-    assert kwargs["event_type"] == "blacklist_image_embedding.created"
-    p = kwargs["payload"]
+    assert dw.BLACKLIST_IMAGE_EMBEDDING_CREATED == "blacklist_image_embedding.created"
+    p = dw.build_blacklist_image_embedding_payload(emb)
     assert p["model_version"] == "clip-vit-b-32"
     assert p["qdrant_point_id"] == "qp-abc"
 

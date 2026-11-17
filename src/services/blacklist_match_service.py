@@ -97,6 +97,11 @@ async def publish_blacklist_match(
         zip_entry=evidence_metadata.get("zip_entry"),
     )
 
+    # lookia-dw copy of the hit (blacklist_image_match:raw, §4.8): recorded
+    # (idempotent) BEFORE the report publish, sent by the tracked delivery. A DB
+    # failure here must not stop the report event or the ingest — logged loud.
+    await _record_hit_for_dw(event)
+
     if _stream_producer is None:
         logger.warning(
             "Blacklist match produced but no stream_producer configured; "
@@ -128,3 +133,22 @@ async def publish_blacklist_match(
             pub_err,
             exc_info=True,
         )
+
+
+async def _record_hit_for_dw(event: dict) -> None:
+    from ..infrastructure.database import get_session
+    from .blacklist_dw_delivery import flush_now, record_match
+
+    try:
+        async with get_session() as session:
+            await record_match(session, event=event)
+    except Exception:
+        logger.error(
+            "Failed to record blacklist hit for the DW: evidence=%s entry=%s",
+            event.get("evidence_id"),
+            event.get("blacklist_entry_id"),
+            exc_info=True,
+        )
+        return
+    if settings.blacklist_match_dw_enabled:
+        await flush_now()

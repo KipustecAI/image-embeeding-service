@@ -21,8 +21,7 @@ from uuid import UUID
 import numpy as np
 
 from ..application.helpers.frame_refs import search_match_frame_fields
-from ..application.helpers.source_type_filter import build_evidence_only_filter
-from ..application.helpers.weapon_filters import build_weapon_filter_conditions
+from ..application.helpers.search_scope import MATCH_NOTHING, build_search_filter
 from ..db.models.constants import (
     BlacklistReferenceStatus,
     SearchRequestStatus,
@@ -35,8 +34,8 @@ from ..db.repositories.blacklist_image_repo import BlacklistImageRepository
 from ..infrastructure.config import get_settings
 from ..infrastructure.database import get_session
 from ..infrastructure.vector_db.image_index_vector_repository import _is_finite_nonzero
+from ..services.blacklist_dw_delivery import flush_now as flush_blacklist_to_dw
 from ..services.dw_publisher_service import (
-    publish_blacklist_image_reference,
     publish_image_search_matches,
     publish_image_search_request,
 )
@@ -132,27 +131,12 @@ async def _process_search_result(payload: dict, message_id: str):
     try:
         query_vector = np.array(vector, dtype=np.float32)
 
-        # Build filter conditions. Explicit allow-list keeps client-supplied
-        # metadata from injecting arbitrary Qdrant filter keys.
-        filter_conditions: dict = {}
-        if search_metadata:
-            if "camera_id" in search_metadata:
-                filter_conditions["camera_id"] = search_metadata["camera_id"]
-            if "object_type" in search_metadata:
-                filter_conditions["object_type"] = search_metadata["object_type"]
-            if "category" in search_metadata:
-                # Scalar or list — list triggers MatchAny in qdrant_repository.search_similar.
-                filter_conditions["category"] = search_metadata["category"]
-            # Weapons — translated from weapons_filter mode via shared helper
-            filter_conditions.update(build_weapon_filter_conditions(search_metadata))
-
-        # User-facing search — never return blacklist points.
-        # See docs/image-blacklist/03_QDRANT.md.
-        filter_conditions = build_evidence_only_filter(filter_conditions)
+        # Evidence-only + the tenant scope fixed at submit time (search_scope.py).
+        filter_conditions = build_search_filter(search_metadata)
 
         # Search Qdrant
         matches = []
-        if _vector_repo:
+        if _vector_repo and filter_conditions is not MATCH_NOTHING:
             matches = await _vector_repo.search_similar(
                 query_vector=query_vector,
                 limit=max_results,
@@ -496,7 +480,6 @@ async def _process_compute_error(payload: dict):
         ref_uuid = None
 
     if ref_uuid is not None:
-        reference_after_error = None
         async with get_session() as session:
             bl_repo = BlacklistImageRepository(session)
             reference = await bl_repo.get_reference(ref_uuid)
@@ -506,15 +489,10 @@ async def _process_compute_error(payload: dict):
                     status=BlacklistReferenceStatus.ERROR,
                     error=f"Compute error: {error}"[:500],
                 )
-                reference_after_error = await bl_repo.get_reference(ref_uuid)
-                if reference_after_error is not None:
-                    await session.flush()
-                    session.expunge(reference_after_error)
         if reference is not None:
             logger.error("Blacklist embed compute error: ref=%s err=%s", ref_uuid, error)
-            if reference_after_error is not None:
-                # DW publish on reference status → ERROR (contract §4.4).
-                publish_blacklist_image_reference(reference_after_error)
+            # Tracked delivery: the reference now in ERROR is pending (contract §4.4).
+            await flush_blacklist_to_dw()
             return
 
     # Fall through to the legacy search-request path.
