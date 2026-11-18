@@ -27,9 +27,12 @@ from ...db.models.constants import (
 from ...db.repositories.blacklist_image_repo import BlacklistImageRepository
 from ...infrastructure.config import get_settings
 from ...infrastructure.database import get_session
-from ...services.dw_publisher_service import (
-    publish_blacklist_image_entry,
-    publish_blacklist_image_reference,
+from ...services.blacklist_dw_delivery import (
+    flush_now as flush_blacklist_to_dw,
+)
+from ...services.blacklist_dw_delivery import (
+    record_entry_deletion,
+    record_reference_deletion,
 )
 
 logger = logging.getLogger(__name__)
@@ -128,9 +131,9 @@ class ManageBlacklistImageUseCase:
             # otherwise raises on attribute access post-commit.
             session.expunge(entry)
 
-        # Fire-and-forget publish to lookia-dw — see contract §4.3.
-        # PII-safe: publisher hashes `name` to `name_hash` before XADD.
-        publish_blacklist_image_entry(entry)
+        # Tracked delivery to lookia-dw (contract §4.3): the new row is pending
+        # until the DW has it; flush now, the sweep retries on failure.
+        await flush_blacklist_to_dw()
         return entry
 
     async def list_entries(
@@ -251,8 +254,8 @@ class ManageBlacklistImageUseCase:
             await session.flush()
             session.expunge(entry)
 
-        # Publish the upserted state to lookia-dw (contract §4.3).
-        publish_blacklist_image_entry(entry)
+        # Tracked delivery to lookia-dw (contract §4.3).
+        await flush_blacklist_to_dw()
         return entry
 
     async def delete_entry(
@@ -275,6 +278,12 @@ class ManageBlacklistImageUseCase:
             if entry is None:
                 raise BlacklistEntryNotFound(str(entry_id))
             self._enforce_owner(entry, requester_user_id, is_admin)
+            # DW tombstones (entry + each reference the cascade removes), written in
+            # the SAME transaction as the delete so they can't be lost.
+            reference_ids = [r.id for r in await repo.list_references(entry_id)]
+            await record_entry_deletion(
+                session, entry_id=entry_id, user_id=entry.user_id, reference_ids=reference_ids
+            )
             point_ids = await repo.delete_entry(entry_id)
 
         if self._vector_repo and point_ids:
@@ -289,6 +298,9 @@ class ManageBlacklistImageUseCase:
                     entry_id,
                     len(point_ids),
                 )
+
+        # Send the tombstones (kept pending while the DW does not accept them yet).
+        await flush_blacklist_to_dw()
 
     # ── Reference CRUD ────────────────────────────────────────────────────
 
@@ -331,25 +343,15 @@ class ManageBlacklistImageUseCase:
             # Lift the entry from CREATED → PROCESSING on the first
             # reference. INDEXED / UPDATING / ERROR remain (the consumer
             # owns transitions out of those).
-            entry_status_changed = False
             if entry.status == BlacklistEntryStatus.CREATED:
                 entry.status = BlacklistEntryStatus.PROCESSING
                 entry.updated_at = datetime.utcnow()
-                entry_status_changed = True
             await session.flush()
             session.expunge(reference)
-            if entry_status_changed:
-                session.expunge(entry)
-                entry_snapshot_for_dw = entry
-            else:
-                entry_snapshot_for_dw = None
 
-        # Publish reference.upserted on every INSERT (contract §4.4).
-        publish_blacklist_image_reference(reference)
-        # Publish entry.upserted if the status transitioned (§4.3 also
-        # fires on UPDATEs that touch any visible field — status counts).
-        if entry_snapshot_for_dw is not None:
-            publish_blacklist_image_entry(entry_snapshot_for_dw)
+        # Tracked delivery to lookia-dw: the new reference (§4.4) and, when the
+        # status moved, the entry (§4.3) are pending until the DW has them.
+        await flush_blacklist_to_dw()
 
         # Fire the embed request to the GPU. ``search_id`` is overloaded
         # to carry the reference id — see docs/image-blacklist/04_EMBEDDING_FLOW.md.
@@ -398,6 +400,9 @@ class ManageBlacklistImageUseCase:
             reference = await repo.get_reference(reference_id)
             if reference is None or reference.entry_id != entry_id:
                 raise BlacklistReferenceNotFound(str(reference_id))
+            await record_reference_deletion(
+                session, reference_id=reference_id, entry_id=entry_id, user_id=entry.user_id
+            )
             point_ids = await repo.delete_reference(reference_id)
 
         if self._vector_repo and point_ids:
@@ -408,6 +413,8 @@ class ManageBlacklistImageUseCase:
                     reference_id,
                     len(point_ids),
                 )
+
+        await flush_blacklist_to_dw()
 
     # ── Backfill ──────────────────────────────────────────────────────────
 

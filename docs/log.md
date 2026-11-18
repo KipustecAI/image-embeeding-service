@@ -14,6 +14,22 @@ Chronological append-only record of meaningful events in the wiki and the system
 
 ---
 
+## [2026-11-17] ship + incident | Search tenant scope FIXED + image blacklist → DW tracked delivery, tombstones, live hits, hub search (not deployed)
+
+**Incident (found 2026-11-17, in `dev` and `main`):** `POST /api/v1/search` stored `metadata.user_id` but no search path applied it. The live consumer, the hourly recalculation and the manual recalculation each built their own Qdrant filter without the tenant, so **a non-admin search matched every tenant's evidence**. The hourly recalculation also lacked the evidence-only filter, so it could return blacklist points. The read routes (`/search/{id}`, `/matches`, `/search/user/{user_id}`) had no owner check.
+- **Fix:** `src/application/helpers/search_scope.py` is the one place that builds the filter: evidence-only + `user_id ∈ scope`. The scope is fixed at submit time: own evidence; a guest → the inviter; `hub_id` → the members from identity-service (a non-admin must be a member; 404 / 503 on identity errors, never unscoped). Clients can no longer set the scope keys in `metadata`. The read routes are limited to the searcher (or an admin), and the manual recalculation to admins.
+
+**DW parity (Stanley, Frontend#dw-online #4932–#4940, plates-service pattern):**
+- **Tracked delivery** of the blacklist streams (`src/services/blacklist_dw_delivery.py`, migration `d7e3a1c9b5f2`): every row records what the DW received, a sweep retries every 60 s, a daily reconcile re-sends at 03:00Z, and `scripts/resend_blacklist_to_dw.py` re-sends on demand.
+- **Tombstones** `blacklist_image_entry.deleted` / `blacklist_image_reference.deleted` (an entry delete also tombstones each reference), behind `BLACKLIST_DW_TOMBSTONES_ENABLED`.
+- **Live hits** → new `blacklist_image_match:raw` (`blacklist_image_match.detected`, name hashed, deterministic id), behind `BLACKLIST_MATCH_DW_ENABLED`.
+- **`hub_id`** on `image_search.*`, behind `DW_SEARCH_HUB_ID_ENABLED`.
+- The three flags default OFF until the DW ships its SDK side. Rows are recorded meanwhile, so turning a flag on backfills.
+- Contract: `docs/requirements/LOOKIA_DW_STREAMS.md` §4.8.
+- DEV counts before the change (devops-2, #prs #4939): 3 entries / 1 reference / 1 embedding, last change 2026-07-23. These equal the DW copy: nothing was lost.
+
+**Tests:** `tests/test_blacklist_dw_delivery.py` (real Postgres) and `tests/test_search_scope.py`. Full suite: 488 passed. The remaining failures exist on `dev` too: `test_valkey_bus_ready` (stream_image_index_maxlen default), plus 7 errors that need CLIP / Qdrant.
+
 ## [2026-10-28] ship + decision | Crop labels (CLS-06) BUILT (not deployed): vehicle-type label per crop from the CLIP worker
 
 Stanley (2026-10-28): image-embedding-compute adds a vehicle-type classifier to each kept crop; we own the labels (contract, storage, DW delivery). Plan `clasificacion-de-recortes` v2 (Compute Nodes - Lookia/image-embedding-compute), task CLS-06; design agreed in `export-compute#model-optimization` #3185.

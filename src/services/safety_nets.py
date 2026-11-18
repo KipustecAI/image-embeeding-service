@@ -11,6 +11,7 @@ import numpy as np
 from sqlalchemy import and_, delete
 
 from ..application.helpers.frame_refs import search_match_frame_fields
+from ..application.helpers.search_scope import MATCH_NOTHING, build_search_filter
 from ..db.models.constants import (
     EmbeddingRequestStatus,
     SearchRequestStatus,
@@ -133,23 +134,19 @@ async def recalculate_searches():
                 logger.warning(f"Query vector not found in Qdrant for search {s.search_id}")
                 continue
 
-            # Build filter conditions
-            filter_conditions = None
-            if s.search_metadata:
-                filter_conditions = {}
-                if "camera_id" in s.search_metadata:
-                    filter_conditions["camera_id"] = s.search_metadata["camera_id"]
-                if "object_type" in s.search_metadata:
-                    filter_conditions["object_type"] = s.search_metadata["object_type"]
-                if not filter_conditions:
-                    filter_conditions = None
-
-            matches = await _vector_repo.search_similar(
-                query_vector=np.array(query_vector, dtype=np.float32),
-                limit=s.max_results,
-                threshold=s.threshold,
-                filter_conditions=filter_conditions,
-            )
+            # Evidence-only + the search's tenant scope (search_scope.py). Before
+            # 2026-11-17 this path had neither: it could return other tenants' evidence
+            # and blacklist points.
+            filter_conditions = build_search_filter(s.search_metadata)
+            if filter_conditions is MATCH_NOTHING:
+                matches = []
+            else:
+                matches = await _vector_repo.search_similar(
+                    query_vector=np.array(query_vector, dtype=np.float32),
+                    limit=s.max_results,
+                    threshold=s.threshold,
+                    filter_conditions=filter_conditions,
+                )
 
             # Delete old matches
             await session.execute(delete(SearchMatch).where(SearchMatch.search_request_id == s.id))
