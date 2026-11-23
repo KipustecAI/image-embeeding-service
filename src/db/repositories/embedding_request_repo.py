@@ -59,6 +59,13 @@ class EmbeddingRequestRepository:
         weapon_summary: dict | None = None,
         weapon_analysis_error: str | None = None,
         category: str | None = None,
+        helmet_analyzed: bool | None = None,
+        helmet_verdict: str | None = None,
+        helmet_alarm: bool | None = None,
+        helmet_frames_sin_casco: int | None = None,
+        helmet_max_sin_casco: float | None = None,
+        helmet_analysis: dict | None = None,
+        helmet_analysis_error: str | None = None,
     ) -> EmbeddingRequest:
         """Create new embedding request at status=1."""
         request = EmbeddingRequest(
@@ -77,6 +84,13 @@ class EmbeddingRequestRepository:
             weapon_summary=weapon_summary,
             weapon_analysis_error=weapon_analysis_error,
             category=category,
+            helmet_analyzed=helmet_analyzed,
+            helmet_verdict=helmet_verdict,
+            helmet_alarm=helmet_alarm,
+            helmet_frames_sin_casco=helmet_frames_sin_casco,
+            helmet_max_sin_casco=helmet_max_sin_casco,
+            helmet_analysis=helmet_analysis,
+            helmet_analysis_error=helmet_analysis_error,
         )
         self.session.add(request)
         await self.session.flush()

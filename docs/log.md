@@ -14,6 +14,10 @@ Chronological append-only record of meaningful events in the wiki and the system
 
 ---
 
+## [2026-11-23] build | Helmet enrichment consumer, backend phase 1 (not deployed)
+
+Contract proposed by compute-image-helmets (`docs/CONTRATO_EMBEDDINGS_ENRIQUECIDO.md`, status PROPOSAL). `embeddings:results` now reads `helmet_analysis` / `helmet_analysis_error` and stores them in seven nullable `embedding_requests.helmet_*` columns (migration `c5e9a2d7f1b3`, column names as suggested in §5). No Qdrant, search, report-event or DW change. Producer phases 2–3 are pending. Consumer contract and open points: [`helmets/CONTRACT.md`](helmets/CONTRACT.md).
+
 ## [2026-11-17] ship + incident | Search tenant scope FIXED + image blacklist → DW tracked delivery, tombstones, live hits, hub search (not deployed)
 
 **Incident (found 2026-11-17, in `dev` and `main`):** `POST /api/v1/search` stored `metadata.user_id` but no search path applied it. The live consumer, the hourly recalculation and the manual recalculation each built their own Qdrant filter without the tenant, so **a non-admin search matched every tenant's evidence**. The hourly recalculation also lacked the evidence-only filter, so it could return blacklist points. The read routes (`/search/{id}`, `/matches`, `/search/user/{user_id}`) had no owner check.

@@ -43,6 +43,17 @@ class EmbeddingRequest(Base):
     # Distinguishes "attempted-and-failed" from "never attempted". See CONTRACT.md §5.
     weapon_analysis_error = Column(Text, nullable=True)
 
+    # Helmet enrichment — see docs/helmets/CONTRACT.md. NULL helmet_analyzed =
+    # row ingested before the feature. The full block lives in helmet_analysis.
+    helmet_analyzed = Column(Boolean, nullable=True)
+    helmet_verdict = Column(Text, nullable=True)
+    helmet_alarm = Column(Boolean, nullable=True)
+    helmet_frames_sin_casco = Column(Integer, nullable=True)
+    helmet_max_sin_casco = Column(Float, nullable=True)
+    # none_as_null: a missing block is SQL NULL, not the JSON value 'null'.
+    helmet_analysis = Column(JSONB(none_as_null=True), nullable=True)
+    helmet_analysis_error = Column(Text, nullable=True)
+
     # Worker tracking
     worker_id = Column(String(100))
     error_message = Column(Text)

@@ -27,6 +27,7 @@ import numpy as np
 from ..application.helpers.category_serializer import entities_to_category
 from ..application.helpers.crop_labels import label_payload_fields, normalize_labels
 from ..application.helpers.frame_refs import frame_url, strip_cache_buster
+from ..application.helpers.helmet_analysis import parse_helmet_fields
 from ..application.helpers.source_type_filter import build_blacklist_only_filter
 from ..application.helpers.weapon_report_events import (
     WEAPONS_DETECTED_EVENT_TYPE,
@@ -196,6 +197,10 @@ async def _process_embeddings_result(payload: dict, message_id: str):
         if isinstance(raw_classifier_version, str) and raw_classifier_version.strip()
         else None
     )
+
+    # Optional helmet enrichment — see docs/helmets/CONTRACT.md. Evidence-level
+    # only: an analyzed crop may have no vector, so nothing goes to Qdrant.
+    helmet_fields = parse_helmet_fields(payload)
 
     if not evidence_id or not embeddings_data:
         logger.warning(f"Skipping result with missing data: evidence_id={evidence_id}")
@@ -373,6 +378,7 @@ async def _process_embeddings_result(payload: dict, message_id: str):
                 weapon_summary=weapon_summary or None,
                 weapon_analysis_error=weapon_error_message,
                 category=category_db,
+                **helmet_fields,
             )
             # Number of embeddings stored for this evidence (both modes).
             request.image_count = len(embeddings_data)
@@ -406,7 +412,10 @@ async def _process_embeddings_result(payload: dict, message_id: str):
             f"has_weapon={bool(weapon_summary.get('has_weapon', False))}, "
             f"detections={weapon_summary.get('total_detections', 0)}, "
             f"trace_event={trace_event!r}, "
-            f"weapon_error={weapon_error_message!r})"
+            f"weapon_error={weapon_error_message!r}, "
+            f"helmet_analyzed={helmet_fields['helmet_analyzed']}, "
+            f"helmet_verdict={helmet_fields['helmet_verdict']!r}, "
+            f"helmet_error={helmet_fields['helmet_analysis_error']!r})"
         )
 
         # ── lookia-dw publishers (fire-and-forget) ──

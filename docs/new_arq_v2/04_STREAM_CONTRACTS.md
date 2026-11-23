@@ -145,6 +145,10 @@ If the message was routed through the `compute-weapons` service, the payload inc
 
 The block is **optional and backwards compatible** — producers that omit it are handled on the legacy path. When present, the backend persists per-image detections to `evidence_embeddings.weapon_detections`, evidence-level summary to `embedding_requests`, and per-image flags (`weapon_analyzed`, `has_weapon`, `weapon_classes`) into the Qdrant point payload for search-time filtering. See [../weapons/](../weapons/) for the full enrichment contract and storage design.
 
+### Optional: `helmet_analysis` enrichment *(added 2026-11-23)*
+
+If the message was routed through `compute-image-helmets`, the same `embeddings.computed` payload carries either `helmet_analysis` or `helmet_analysis_error`. The backend stores the verdict, the alarm flag and the full block on `embedding_requests.helmet_*`. Nothing goes to Qdrant and no event is published. Full contract: [../helmets/CONTRACT.md](../helmets/CONTRACT.md).
+
 ### Error
 
 ```json

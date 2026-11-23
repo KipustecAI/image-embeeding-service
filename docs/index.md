@@ -61,6 +61,7 @@ Wire-level contracts with upstream / downstream services. Wiki layer — these a
 | [requirements/REPORT_GENERATION_STREAMS.md](requirements/REPORT_GENERATION_STREAMS.md) | Outbound contract to the report-generation team. §2 weapons:detected; §3 image:blacklist_match. **Canonical for those wire shapes.** | wiki (negotiation-driven) |
 | [requirements/LOOKIA_DW_PUBLISHERS.md](requirements/LOOKIA_DW_PUBLISHERS.md) | Inbound requirement from lookia-dw — 7 publish hooks feeding their data warehouse. **Negotiation tracker** — captures enum maps, MAXLEN sizing, lifecycle simplification asks, implementation plan. | wiki (negotiation-driven) |
 | [requirements/LOOKIA_DW_STREAMS.md](requirements/LOOKIA_DW_STREAMS.md) | **Authoritative wire-format contract** for the 7 outbound streams to lookia-dw. Per-stream payload schemas + examples + MAXLEN + delivery / ordering / dedup semantics. The DW consumer builds against this. | wiki (canonical contract) |
+| [helmets/CONTRACT.md](helmets/CONTRACT.md) | Helmet enrichment of `embeddings:results` — fields consumed, storage, states, tolerance rules, open points. Backend side (phase 1) only. | wiki (contract, consumer side) |
 | [weapons/CONTRACT.md](weapons/CONTRACT.md) | Authoritative producer contract for the image-weapons-compute service (their docs, our copy for reference). | wiki (mirror) |
 
 ---

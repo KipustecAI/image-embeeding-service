@@ -169,7 +169,7 @@ Single collection for both evidence and blacklist vectors, discriminated by the 
 
 | Table | Purpose |
 |-------|---------|
-| `embedding_requests` | Tracks each evidence through embedding. Carries ETL fields (`user_id`, `device_id`, `app_id`, `infraction_code`), weapons fields (`weapon_analyzed`, `has_weapon`, `weapon_classes`, `weapon_max_confidence`, `weapon_summary`, `weapon_analysis_error`), and `category` (stringified entity ids). |
+| `embedding_requests` | Tracks each evidence through embedding. Carries ETL fields (`user_id`, `device_id`, `app_id`, `infraction_code`), weapons fields (`weapon_analyzed`, `has_weapon`, `weapon_classes`, `weapon_max_confidence`, `weapon_summary`, `weapon_analysis_error`), nullable helmet fields (`helmet_analyzed`, `helmet_verdict`, `helmet_alarm`, `helmet_frames_sin_casco`, `helmet_max_sin_casco`, `helmet_analysis`, `helmet_analysis_error`), and `category` (stringified entity ids). |
 | `evidence_embeddings` | One row per vector stored in Qdrant (FK → embedding_requests). Optional `weapon_detections JSONB`. |
 | `search_requests` | Tracks search lifecycle. `qdrant_query_point_id` links to stored query vector. |
 | `search_matches` | Individual match results per search (FK → search_requests). |
